@@ -9,6 +9,10 @@ export class InMemoryTransactionRepository implements TransactionRepository, Sna
     this.rows.set(transaction.transactionExternalId, transaction);
   }
 
+  async update(transaction: Transaction): Promise<void> {
+    this.rows.set(transaction.transactionExternalId, transaction);
+  }
+
   async findByExternalId(transactionExternalId: string): Promise<Transaction | null> {
     return this.rows.get(transactionExternalId) ?? null;
   }
