@@ -348,3 +348,26 @@ concorrente e mais eficiente em páginas profundas, e é o caminho se o volume c
 não permite pular para uma página arbitrária, que é o que a interface oferece. O limite de
 100 impede que um único pedido leia a tabela inteira. `total` na mesma transação garante
 que a página e a contagem sejam do mesmo instante.
+
+## Atualização de status na interface
+
+**Decisão:** o serviço de transações expõe `GET /transactions/:id/events`, um stream
+Server-Sent Events por transação. Ao conectar, o cliente recebe o status atual; cada mudança
+aplicada pelo consumer de status é repassada; quando o status deixa de ser pendente, o
+servidor fecha o stream. O dashboard assina o stream só enquanto mostra uma transação
+pendente. O fan-out é em memória, dentro da instância que aplicou o veredito.
+
+**Alternativas consideradas:** o dashboard consultar `GET /transactions/:id` repetidamente
+enquanto a transação estiver pendente; um canal WebSocket bidirecional (Socket.IO).
+
+**Por quê:** medido localmente, o veredito fica visível entre 10 e 40 ms depois da criação,
+então o que a interface precisa é ser avisada uma vez, no instante certo, e não repetir uma
+consulta cuja resposta quase sempre já mudou antes da segunda tentativa. Consultar em
+intervalo obriga a escolher um número que é grande demais para a maioria dos casos e pequeno
+demais para os raros, e multiplica leituras que não trazem nada. SSE é unidirecional, roda
+sobre HTTP simples, reconecta sozinho no navegador e o servidor fecha o stream no estado
+terminal, então nenhuma conexão fica pendurada. WebSocket daria o mesmo com um canal de
+volta que esta tela não usa: o cliente só ouve. O limite conhecido é o fan-out em memória:
+com duas instâncias do serviço, o veredito aplicado em uma não chega ao stream aberto na
+outra; a evolução é um pub/sub compartilhado (Redis) entre as instâncias, e a tela continua
+correta mesmo sem ele porque a consulta direta sempre reflete o banco.
