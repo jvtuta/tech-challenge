@@ -10,16 +10,16 @@
   "packageManager": "pnpm@11.13.0",
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "pnpm build:contracts && pnpm -r --if-present run typecheck",
+    "typecheck": "pnpm build:packages && pnpm -r --if-present run typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "pnpm build:contracts && pnpm -r --if-present run test",
+    "test": "pnpm build:packages && pnpm -r --if-present run test",
     "build": "pnpm -r --if-present run build",
     "quality": "pnpm lint && pnpm typecheck && pnpm format:check && pnpm test && pnpm build",
     "lint:fix": "eslint . --fix",
     "prepare": "husky",
-    "build:contracts": "pnpm --filter @tech-challenge/contracts build",
-    "db:migrate": "pnpm --filter @tech-challenge/transactions db:migrate"
+    "db:migrate": "pnpm --filter @tech-challenge/transactions db:migrate",
+    "build:packages": "pnpm --filter \"./packages/*\" build"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.2",
