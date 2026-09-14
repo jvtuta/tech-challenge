@@ -1,0 +1,38 @@
+{
+  "name": "tech-challenge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Transações com validação antifraude assíncrona via Kafka: API, worker antifraude e dashboard",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "packageManager": "pnpm@11.13.0",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm -r --if-present run test",
+    "build": "pnpm -r --if-present run build",
+    "quality": "pnpm lint && pnpm typecheck && pnpm format:check && pnpm test && pnpm build",
+    "lint:fix": "eslint . --fix",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.2",
+    "@commitlint/config-conventional": "^21.2.2",
+    "@eslint/eslintrc": "^3.3.7",
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.19.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "15.5.25",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.12.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.1",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.0"
+  }
+}
