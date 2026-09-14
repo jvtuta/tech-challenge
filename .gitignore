@@ -28,3 +28,6 @@ pnpm-debug.log*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# prisma client gerado
+apps/transactions/src/generated/
