@@ -150,15 +150,22 @@ autorização por conta, ela é regra, e aí um caso de uso de leitura passa a f
 ## Erros de negócio sem exceções do framework
 
 **Decisão:** domínio e aplicação lançam subclasses de `DomainError`, que carregam um código
-e o status HTTP; um filtro global na borda traduz para a resposta. Validação de formato fica
-no DTO com `class-validator`; validação de regra fica no domínio (`TransactionValue`).
+e uma categoria semântica (`invalid`, `not-found`, `unavailable`), nunca um status HTTP. Um
+filtro global em `shared/infrastructure/http` é o único lugar que traduz a categoria para o
+status da resposta, com teste próprio. Erros que não pertencem a um módulo, como a falha ao
+publicar um evento, vivem em `shared/application` e guardam a causa original pela opção
+nativa do `Error`. Validação de formato fica no DTO com `class-validator`; validação de
+regra fica no domínio (`TransactionValue`).
 
 **Alternativas consideradas:** lançar `HttpException` do NestJS de dentro do caso de uso;
-validar tudo no DTO.
+cada erro carregar o próprio status HTTP; validar tudo no DTO.
 
-**Por quê:** o caso de uso não deve saber que existe HTTP; o mesmo código será chamado pelo
-consumidor Kafka, onde `503` não significa nada. Separar formato de regra evita que a regra
-de negócio dependa de decorators e permite testá-la sem subir o Nest.
+**Por quê:** o caso de uso não deve saber que existe HTTP; o mesmo código é chamado pelo
+consumidor Kafka, onde `503` não significa nada, mas `unavailable` significa "tente de
+novo" e `invalid` significa "descarte". O status dentro do erro foi a primeira versão e
+vazava protocolo para dentro da aplicação; a categoria mantém a decisão de tradução num
+único ponto da borda. Separar formato de regra evita que a regra de negócio dependa de
+decorators e permite testá-la sem subir o Nest.
 
 ## Regra antifraude como função pura
 

@@ -2,7 +2,7 @@ import { InMemoryEventPublisher } from '@tech-challenge/messaging';
 import { InMemoryUnitOfWork } from '../../shared/testing/in-memory-unit-of-work';
 import { InMemoryTransactionRepository } from '../testing/in-memory-transaction.repository';
 import { CreateTransaction } from './create-transaction.use-case';
-import { EventPublishFailedError } from './errors';
+import { EventPublishFailedError } from '../../shared/application/errors';
 
 describe('CreateTransaction', () => {
   const input = {

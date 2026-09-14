@@ -6,7 +6,7 @@ import {
   TRANSACTION_REPOSITORY,
   type TransactionRepository,
 } from '../domain/transaction.repository';
-import { EventPublishFailedError } from './errors';
+import { EventPublishFailedError } from '../../shared/application/errors';
 import { UNIT_OF_WORK, type UnitOfWork } from '../../shared/application/unit-of-work';
 
 @Injectable()
