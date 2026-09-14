@@ -7,6 +7,8 @@ const shared = {
 
 /** Dois projetos na mesma config: `pnpm test`, o gate e a extensão da IDE enxergam os dois. */
 module.exports = {
+  // Os testes de ponta a ponta compartilham o banco e o broker: arquivos em paralelo se atropelam.
+  maxWorkers: 1,
   projects: [
     { ...shared, displayName: 'unit', rootDir: 'src', testRegex: '.*\\.spec\\.ts$' },
     {

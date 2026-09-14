@@ -4,3 +4,4 @@ process.env.DATABASE_URL ??=
 process.env.TRANSACTIONS_PORT ??= '3001';
 process.env.KAFKA_BROKERS ??= 'localhost:9092';
 process.env.KAFKA_CLIENT_ID ??= 'transactions-e2e';
+process.env.KAFKA_GROUP_ID_TRANSACTIONS ??= 'transactions-e2e';
