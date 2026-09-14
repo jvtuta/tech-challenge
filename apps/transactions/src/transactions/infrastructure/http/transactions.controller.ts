@@ -25,10 +25,13 @@ export class TransactionsController {
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() body: CreateTransactionDto): Promise<TransactionResponse> {
     const { transactionExternalId } = await this.createTransaction.execute(body);
-    // A leitura devolve o contrato completo (nome do tipo incluído) sem duplicar o mapeamento.
+    // Depois de gravar, a resposta vem do lado de leitura: é o read model que conhece o
+    // contrato completo (nome do tipo incluído), e assim o mapeamento existe uma vez só, no
+    // mesmo caminho que o GET usa. Se a leitura não achar o que acabou de ser gravado, é o
+    // mesmo erro de negócio da consulta, traduzido na borda como os demais.
     const created = await this.queries.findByExternalId(transactionExternalId);
     if (!created) {
-      throw new Error(`Transaction ${transactionExternalId} vanished right after being created`);
+      throw new TransactionNotFoundError(transactionExternalId);
     }
     return created;
   }
