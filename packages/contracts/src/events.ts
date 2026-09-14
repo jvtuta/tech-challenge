@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { TransactionStatus } from './transaction';
 
 export const TOPICS = {
@@ -57,7 +56,8 @@ export function createEnvelope<TTopic extends TopicName>(
   options: EnvelopeOptions = {},
 ): EventEnvelope<TTopic> {
   return {
-    eventId: options.eventId ?? randomUUID(),
+    // O crypto global existe no Node 22 e no navegador; o pacote precisa rodar nos dois.
+    eventId: options.eventId ?? crypto.randomUUID(),
     eventType,
     version: 1,
     occurredAt: (options.occurredAt ?? new Date()).toISOString(),
