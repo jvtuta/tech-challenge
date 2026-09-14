@@ -230,3 +230,64 @@ uso nos meus outros serviços: a interface lista tudo que o serviço precisa do 
 cada getter é testado sem subir o Nest e quem injeta não sabe de onde o valor vem. O schema
 `zod` faria a mesma validação com menos código, mas espalharia a leitura por quem consome;
 um pacote próprio seria abstração para poucas linhas repetidas em dois serviços.
+
+## Consumo dos eventos pelo transporte Kafka do NestJS
+
+**Decisão:** cada serviço que consome sobe como aplicação híbrida: o HTTP de sempre mais o
+transporte Kafka do `@nestjs/microservices` (`connectMicroservice` com `Transport.KAFKA`),
+e os handlers são controllers com `@EventPattern`. A publicação continua pela porta
+`EventPublisher` do pacote `@tech-challenge/messaging` (adapter KafkaJS), e toda mensagem
+recebida passa por `parseEnvelope` antes de o handler ver qualquer coisa. No boot, o serviço
+garante os tópicos pelo admin (`ensureTopics`, idempotente), porque o `subscribe` falha se o
+tópico ainda não existe e o consumer pode subir antes do primeiro produtor. O antifraude é um
+worker: consome `transaction.created`, aplica a regra e publica
+`transaction.status.updated` com a mesma chave.
+
+**Alternativas consideradas:** um consumer KafkaJS próprio no pacote de mensageria, com o
+laço de consumo e a política de falha escritos à mão (foi a primeira versão desta PR);
+provisionar os tópicos por script fora do serviço; validar o payload com um schema registry.
+
+**Por quê:** o transporte do NestJS já faz o que o consumer próprio fazia (conexão, grupo,
+assinatura, conversão do JSON) e documenta a semântica que importa: em `@EventPattern`, uma
+exceção não tratada é retriable, o offset não é commitado e o broker reentrega. Manter
+noventa linhas próprias para reproduzir isso seria código a mais para manter sem ganho.
+O que o transporte não faz, e continua no código, é validar a forma do envelope e garantir
+que o tópico exista antes de assinar. Criação de tópicos no boot serve ao ambiente local e
+ao CI; em produção os tópicos seriam provisionados com partições e retenção definidas. Um
+schema registry faria a validação em runtime com evolução formal, mas é infraestrutura a
+mais para dois eventos cuja forma já é fixada em código pelo pacote de contratos.
+
+## Falha no consumo: descartar o que está fora do contrato, reprocessar o resto
+
+**Decisão:** o handler tem uma política só. Mensagem fora do contrato (JSON quebrado, tópico
+desconhecido, versão diferente, payload sem os campos) é descartada e registrada em log, e o
+handler retorna normalmente, então o offset avança. Erro lançado pelo handler (broker fora
+ao publicar o veredito, por exemplo) sobe para o transporte, que o trata como retriable: o
+offset não é commitado e a mensagem é reentregue. Não há fila de mensagens mortas nesta
+entrega.
+
+**Alternativas consideradas:** reprocessar tudo, inclusive mensagens malformadas; publicar
+o que falhou em um tópico de mensagens mortas (DLQ) depois de N tentativas; capturar os
+erros do handler e seguir.
+
+**Por quê:** reprocessar JSON quebrado não conserta o JSON e trava a partição para sempre;
+descartar com log é o único destino para ele. Já um erro do handler costuma ser
+transitório, e reprocessar é o comportamento certo; engolir perderia vereditos. A DLQ é a
+evolução natural para o caso em que um erro do handler não é transitório: ela separa a
+mensagem envenenada sem travar a partição e permite reprocessar depois. Ficou de fora porque
+exige um segundo tópico, um contador de tentativas e um processo de reprocessamento, e o
+enunciado pede que o caminho triste exista e seja explicado, não que seja completo.
+
+## Health do antifraude como readiness da dependência real
+
+**Decisão:** `GET /health` do antifraude usa o Terminus com um único indicador, `kafka`,
+que verifica pelo próprio transporte se o broker responde. O serviço não expõe nenhum outro
+endpoint HTTP.
+
+**Alternativas consideradas:** manter o `{ status: ok }` fixo; não expor HTTP algum no
+worker; indicadores que não dizem respeito ao trabalho do serviço (ping HTTP externo, uso de
+memória).
+
+**Por quê:** um health fixo diz que o processo está vivo, não que ele consegue fazer o único
+trabalho que tem, e para um consumer isso é alcançar o broker. Sem HTTP, Docker e Kubernetes
+não teriam como saber. Indicadores alheios ao trabalho do serviço só acrescentam ruído.
