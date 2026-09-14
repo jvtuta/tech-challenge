@@ -332,22 +332,36 @@ antigos para transações inexistentes, e é o motivo de a categoria do erro dec
 Com o commit antes da publicação, o veredito não pode chegar antes de a linha existir;
 `not-found` no consumer de status passa a significar um id que nunca existiu, e é descartado.
 
-## Listagem paginada por página, com limite de tamanho
+## Listagem paginada por página, com limite de tamanho, por um repositório pesquisável
 
-**Decisão:** `GET /transactions` aceita `status`, `transferTypeId`, `from`, `to`, `page` e
-`pageSize` (padrão 20, máximo 100) e devolve `{ items, page, pageSize, total }`, do mais
-recente para o mais antigo. A consulta vive no read model, com `findMany` e `count` na mesma
-transação do Prisma, e os filtros são exatamente os índices compostos criados na modelagem.
+**Decisão:** `GET /transactions` aceita `status`, `transferTypeId`, `from`, `to`, `page`,
+`pageSize` (padrão 20, máximo 100), `sort` (`createdAt` ou `value`) e `sortDir`, e devolve
+`{ items, page, pageSize, total }`, do mais recente para o mais antigo quando não há
+ordenação pedida. A consulta segue o contrato de repositório pesquisável que mantenho em
+`shared/domain/searchable-repository.ts`: `SearchParams<Filter>` normaliza página, tamanho,
+ordenação e filtro; `SearchResult<Item, Filter>` carrega os itens, o total e a última página;
+quem implementa `SearchableRepository` declara `sortableFields` e expõe `search(params)`. O
+read model `TransactionQueries` implementa esse contrato traduzindo o filtro para o `where` do
+Prisma (só o que veio preenchido, cada campo casando com um índice composto da modelagem) e
+a ordenação para o `orderBy` (campo fora de `sortableFields` cai no padrão). O controller monta
+os `SearchParams` a partir do DTO validado e devolve o `SearchResult` no contrato HTTP.
 
 **Alternativas consideradas:** paginação por cursor (`createdAt` + id); devolver a lista sem
-`total`; deixar `pageSize` sem limite.
+`total`; deixar `pageSize` sem limite; manter a listagem como um método ad hoc do read model,
+com página, filtro e ordenação lidos direto da query string.
 
-**Por quê:** o dashboard mostra "página X de Y" e precisa do total; `offset` com `total` é o
-que a tela pede e é barato no volume do enunciado. Cursor é mais estável sob inserção
-concorrente e mais eficiente em páginas profundas, e é o caminho se o volume crescer, mas
-não permite pular para uma página arbitrária, que é o que a interface oferece. O limite de
-100 impede que um único pedido leia a tabela inteira. `total` na mesma transação garante
-que a página e a contagem sejam do mesmo instante.
+**Por quê:** o repositório pesquisável é um padrão que uso nos projetos NestJS em que trabalho
+(está no Lexxen Pay e no CRM da Klevr, sobre a mesma base que gerou este esqueleto): toda
+listagem tem a mesma forma de entrada e de saída, os campos ordenáveis são declarados no
+repositório em vez de espalhados por controllers, e a normalização da página e do tamanho
+tem um dono só e um teste só. Aqui ele vive no read model, e não no repositório do agregado,
+porque a listagem não hidrata a entidade e não pertence aos casos de uso de escrita, como
+registrado em "Leituras fora dos casos de uso". O dashboard mostra "página X de Y" e precisa
+do total; `offset` com `total` é o que a tela pede e é barato no volume do enunciado. Cursor é
+mais estável sob inserção concorrente e mais eficiente em páginas profundas, e é o caminho se
+o volume crescer, mas não permite pular para uma página arbitrária, que é o que a interface
+oferece. O limite de 100 impede que um único pedido leia a tabela inteira. `total` na mesma
+transação garante que a página e a contagem sejam do mesmo instante.
 
 ## Atualização de status na interface
 
