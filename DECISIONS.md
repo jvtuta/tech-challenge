@@ -298,8 +298,9 @@ não teriam como saber. Indicadores alheios ao trabalho do serviço só acrescen
 que carrega a transação e chama `settle(status)` no domínio. Só uma transação `pending`
 muda; o mesmo veredito entregue de novo não altera nada e não grava; um veredito diferente
 sobre uma transação já decidida é recusado (`TransactionAlreadySettledError`), porque o
-primeiro veredito é o que valeu. No consumer Kafka do serviço de transações, a categoria do erro
-decide o destino da mensagem: erro de negócio determinístico (`invalid`, como o conflito;
+primeiro veredito é o que valeu. No consumer Kafka do serviço de transações, o envelope é validado por
+um pipe no `@Payload` e a categoria do erro decide o destino da mensagem em um único filter
+(`DiscardEventFilter`), que vale para todos os handlers Kafka do serviço: erro de negócio determinístico (`invalid`, como o conflito;
 `not-found`, depois de uma espera curta de três tentativas, porque o veredito pode chegar
 antes de a gravação da transação ficar visível) é descartado com log; qualquer outro erro sobe
 para o transporte reentregar.

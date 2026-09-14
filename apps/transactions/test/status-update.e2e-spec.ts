@@ -115,6 +115,21 @@ describe('status update (e2e, Kafka real)', () => {
     expect(after.transactionStatus.name).toBe('approved');
   });
 
+  it('discards a malformed message and a verdict for an unknown transaction without stopping', async () => {
+    await producer.send({
+      topic: TOPICS.TRANSACTION_STATUS_UPDATED,
+      messages: [{ key: 'broken', value: '{not json' }],
+    });
+    await publishVerdict('9d8c7b6a-5f4e-4d3c-8b2a-1a0f9e8d7c6b', 'approved');
+    const { body } = await request(app.getHttpServer())
+      .post('/transactions')
+      .send(validBody)
+      .expect(201);
+
+    await publishVerdict(body.transactionExternalId, 'approved');
+    await expect(waitForStatus(body.transactionExternalId, 'approved')).resolves.toBe('approved');
+  });
+
   it('keeps the first verdict when a conflicting one arrives later', async () => {
     const { body } = await request(app.getHttpServer())
       .post('/transactions')
