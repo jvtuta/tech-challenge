@@ -33,14 +33,15 @@ flowchart LR
 Se o broker recusar, a resposta continua sendo `201` e um varredor republica o evento das
 pendentes com mais de 10 segundos, a cada 5 segundos. O consumer de
 `transaction.status.updated` aplica o veredito só a partir de `pending`, então um evento
-duplicado não muda nada. `GET /transactions/:id` devolve uma transação, `GET /transactions`
+duplicado não muda nada, e desiste da mensagem depois de três entregas para não prender a
+partição enquanto o banco estiver fora: a transação segue pendente e o varredor recupera. `GET /transactions/:id` devolve uma transação, `GET /transactions`
 lista com filtros, paginação e ordenação, e `GET /transactions/:id/events` é um stream
 Server-Sent Events que entrega o status atual e cada mudança até o estado final.
 
 **`apps/anti-fraud`**: consome `transaction.created`, aplica a regra (valor acima de 1000
 rejeita, 1000 exato aprova) por uma função pura e publica `transaction.status.updated`.
-Eventos fora do contrato são descartados com log; falhas de infraestrutura são
-reprocessadas. `GET /health` responde pela conexão real com o Kafka.
+Eventos fora do contrato são descartados com log; falha de infraestrutura é reentregue até
+três vezes e depois abandonada, pelo mesmo motivo. `GET /health` responde pela conexão real com o Kafka.
 
 **`apps/web`**: listagem paginada com filtros por status, tipo, período e ordenação; detalhe
 que assina o stream SSE enquanto a transação está pendente e mostra o veredito assim que
@@ -87,7 +88,7 @@ http://localhost:8080 para inspecionar os tópicos.
 
 ```bash
 pnpm quality        # lint, typecheck, format:check, test e build, na ordem; é o que o CI roda
-pnpm test           # só os testes: 103 no total
+pnpm test           # só os testes: 112 no total
 ```
 
 Os testes de ponta a ponta dos serviços usam o Postgres e o Kafka do `docker compose`, lendo
@@ -103,14 +104,14 @@ pnpm --filter @tech-challenge/anti-fraud exec jest -t "1000"                # po
 
 O que cada suíte cobre:
 
-- **transactions** (58): entidade e transição de status; criação com publicação após o
+- **transactions** (61): entidade e transição de status; criação com publicação após o
   commit e com o broker recusando; varredor de pendentes; consumer de status idempotente e
   veredito órfão; listagem com filtros, ordenação e paginação; SSE até o estado final;
-  filtro de erros de negócio; health.
-- **anti-fraud** (18): regra na fronteira (999.99, 1000, 1000.01); consumer publicando o
-  veredito com a chave certa; descarte de evento fora do contrato; health com o broker fora.
-- **messaging** (15) e **contracts** (2): interface fluente, envelope, validação e
-  publisher em memória.
+  filtro de erros de negócio, com o teto de reentregas; health.
+- **anti-fraud** (20): regra na fronteira (999.99, 1000, 1000.01); consumer publicando o
+  veredito com a chave certa; descarte de evento fora do contrato e teto de reentregas; health com o broker fora.
+- **messaging** (19) e **contracts** (2): interface fluente, envelope, validação,
+  orçamento de reentregas e publisher em memória.
 - **web** (10): três estados da listagem e a tabela; validação, gerador de UUID e envio do
   formulário; detalhe reagindo ao SSE e 404; boundary de erro.
 
@@ -161,9 +162,9 @@ Tudo entrou por PRs pequenas para `develop`, uma responsabilidade por branch, co
 Cada item abaixo tem o porquê e o momento em que entraria no `DECISIONS.md`.
 
 - **Outbox transacional e fila de mensagens envenenadas**: o varredor de pendentes cobre a
-  falha de publicação com menos partes; o outbox entra quando o volume pedir recuperação em
-  milissegundos, e uma fila própria quando houver o que fazer com o evento descartado além
-  do log.
+  falha de publicação com menos partes, e o teto de reentregas devolve a mensagem travada ao
+  mesmo varredor; o outbox entra quando o volume pedir recuperação em milissegundos, e uma
+  fila própria quando houver o que fazer com o evento abandonado além do log.
 - **Listagem em tempo real**: só o detalhe assina o SSE; a listagem consulta ao filtrar ou
   paginar. Um stream global da listagem exige fan-out fora da memória do processo quando
   houver mais de uma réplica.
