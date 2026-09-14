@@ -319,3 +319,26 @@ recusa explícita deixa o conflito visível no log em vez de escondido. Reproces
 determinístico daria o mesmo resultado a cada tentativa e travaria a partição em uma única
 mensagem; foi o que aconteceu no primeiro teste de ponta a ponta desta entrega, com vereditos
 antigos para transações inexistentes, e é o motivo de a categoria do erro decidir o destino.
+
+### A janela de visibilidade e o que a espera de três tentativas resolve
+
+A criação publica `transaction.created` dentro da transação do banco (para que "Kafka recusou"
+desfaça a gravação). O custo é uma janela de milissegundos em que o evento já saiu e a linha
+ainda não foi commitada. Medido localmente, o veredito fica visível entre 10 e 40 ms depois
+do `POST`, na mesma ordem de grandeza do commit; então a corrida entre o consumer de status e
+o commit da criação é real. Sem tratamento, o veredito chega, o `SELECT` não acha a linha, o
+erro é descartado e a transação fica pendente para sempre com o veredito perdido.
+
+A espera de três tentativas com 250 ms cobre essa janela sem transformar um id inexistente em
+mensagem envenenada. É uma mitigação, não a solução definitiva, e tem dois limites: um
+`sleep` dentro do consumer segura o worker da partição enquanto espera, e os números são
+fixos; um commit lento (lock, autovacuum, I/O) acima de 750 ms ainda perde o veredito, só que
+raramente.
+
+Dois caminhos resolvem o problema de fundo, e a escolha entre eles é o que mudaria com outros
+requisitos: o outbox transacional (evento gravado na mesma transação da linha; um relay publica
+depois do commit), que elimina a corrida e o "pendente sem evento" por construção, ao custo de
+uma tabela, um relay e a limpeza dele; ou inverter a ordem, commit antes de publicar, e manter
+um varredor que republica o `created` de transações pendentes há mais de N segundos, que aceita
+a falha mas a torna recuperável com menos infraestrutura. Com o volume do enunciado, o varredor
+bastaria; com volume alto e vários produtores, o outbox é o caminho.
