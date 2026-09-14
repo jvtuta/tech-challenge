@@ -10,6 +10,11 @@ export class InMemoryEventPublisher implements EventPublisher {
     return this;
   }
 
+  recover(): this {
+    this.failure = undefined;
+    return this;
+  }
+
   async publish(event: OutboundEvent): Promise<void> {
     if (this.failure) {
       throw this.failure;
