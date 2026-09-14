@@ -174,8 +174,22 @@ describe('transactions (e2e)', () => {
       expect(since.total).toBe(2);
     });
 
+    it('sorts by value when asked, most recent first otherwise', async () => {
+      const cheap = await create(1, 10);
+      const expensive = await create(1, 30);
+      const middle = await create(2, 20);
+
+      const { body } = await request(app.getHttpServer())
+        .get('/transactions?sort=value&sortDir=asc')
+        .expect(200);
+      expect(
+        body.items.map((item: { transactionExternalId: string }) => item.transactionExternalId),
+      ).toEqual([cheap, middle, expensive]);
+    });
+
     it('rejects filters outside the contract with 400', async () => {
       await request(app.getHttpServer()).get('/transactions?status=unknown').expect(400);
+      await request(app.getHttpServer()).get('/transactions?sort=status').expect(400);
       await request(app.getHttpServer()).get('/transactions?pageSize=500').expect(400);
       await request(app.getHttpServer()).get('/transactions?from=yesterday').expect(400);
     });

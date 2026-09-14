@@ -1,14 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import type {
-  ListTransactionsQuery,
-  TransactionListResponse,
-  TransactionResponse,
-  TransactionStatus,
+import {
+  TRANSACTION_SORT_FIELDS,
+  type TransactionFilter,
+  type TransactionResponse,
+  type TransactionStatus,
 } from '@tech-challenge/contracts';
 import type { Prisma, Transaction, TransactionType } from '@prisma/client';
+import {
+  SearchResult,
+  type SearchParams,
+  type SearchableRepository,
+} from '../../../shared/domain/searchable-repository';
 import { PrismaService } from '../../../shared/infrastructure/prisma/prisma.service';
-
-export const DEFAULT_PAGE_SIZE = 20;
 
 type TransactionRow = Transaction & { transferType: Pick<TransactionType, 'name'> };
 
@@ -17,7 +20,12 @@ type TransactionRow = Transaction & { transferType: Pick<TransactionType, 'name'
  * negócio vivem nos casos de uso de escrita; aqui só existe consulta.
  */
 @Injectable()
-export class TransactionQueries {
+export class TransactionQueries implements SearchableRepository<
+  TransactionResponse,
+  TransactionFilter
+> {
+  readonly sortableFields = TRANSACTION_SORT_FIELDS;
+
   constructor(private readonly prisma: PrismaService) {}
 
   async findByExternalId(transactionExternalId: string): Promise<TransactionResponse | null> {
@@ -28,27 +36,46 @@ export class TransactionQueries {
     return row ? toResponse(row) : null;
   }
 
-  /** Página mais recente primeiro; `total` vem da mesma transação para a contagem bater com a página. */
-  async list(query: ListTransactionsQuery): Promise<TransactionListResponse> {
-    const page = query.page ?? 1;
-    const pageSize = query.pageSize ?? DEFAULT_PAGE_SIZE;
-    const where: Prisma.TransactionWhereInput = {
-      status: query.status,
-      transferTypeId: query.transferTypeId,
-      createdAt: query.from || query.to ? { gte: query.from, lte: query.to } : undefined,
-    };
+  /** `total` vem da mesma transação do banco para a contagem bater com a página. */
+  async search(
+    params: SearchParams<TransactionFilter>,
+  ): Promise<SearchResult<TransactionResponse, TransactionFilter>> {
+    const where = toWhere(params.filter);
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.transaction.findMany({
         where,
         include: { transferType: { select: { name: true } } },
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        orderBy: toOrderBy(params, this.sortableFields),
+        skip: (params.page - 1) * params.perPage,
+        take: params.perPage,
       }),
       this.prisma.transaction.count({ where }),
     ]);
-    return { items: rows.map(toResponse), page, pageSize, total };
+    return new SearchResult({ items: rows.map(toResponse), total, params });
   }
+}
+
+/** Só os filtros preenchidos entram na consulta; cada um casa com um índice composto da modelagem. */
+export function toWhere(filter: TransactionFilter | null): Prisma.TransactionWhereInput {
+  if (!filter) {
+    return {};
+  }
+  return {
+    status: filter.status,
+    transferTypeId: filter.transferTypeId,
+    createdAt: filter.from || filter.to ? { gte: filter.from, lte: filter.to } : undefined,
+  };
+}
+
+/** Ordena pelo campo pedido quando ele é ordenável; fora isso, do mais recente para o mais antigo. */
+export function toOrderBy(
+  params: SearchParams<TransactionFilter>,
+  sortableFields: readonly string[],
+): Prisma.TransactionOrderByWithRelationInput {
+  if (params.sort && params.sortDir && sortableFields.includes(params.sort)) {
+    return { [params.sort]: params.sortDir };
+  }
+  return { createdAt: 'desc' };
 }
 
 function toResponse(row: TransactionRow): TransactionResponse {
