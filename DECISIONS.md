@@ -176,3 +176,23 @@ sem subir infraestrutura. Dentro do handler ela ficaria acoplada ao parse da men
 producer. O limite não é configuração de ambiente (como host ou credencial), é regra do
 negócio dada pelo enunciado: mudar o valor é uma decisão de produto, e tem que passar por
 código e teste. Um serviço injetável só acrescentaria decorator a uma função de uma linha.
+
+## Testes de ponta a ponta contra o banco real
+
+**Decisão:** a suíte de ponta a ponta do serviço de transações sobe o `AppModule` inteiro
+com supertest contra um PostgreSQL real, com a tabela limpa antes de cada caso, e substitui
+apenas o publisher de eventos por uma implementação em memória. O CI sobe o Postgres como
+serviço e aplica as migrations antes de rodar exatamente o mesmo `pnpm quality` da máquina
+local. A configuração da borda (validação e filtro de erros) é uma função compartilhada entre
+o `main.ts` e os testes.
+
+**Alternativas consideradas:** mockar o Prisma nos testes de ponta a ponta; usar
+Testcontainers para subir o banco de dentro do Jest; subir também o Kafka nesta suíte.
+
+**Por quê:** o comportamento que mais importa provar aqui é a transação do banco desfazendo a
+gravação quando o evento não sai, e um mock do Prisma não prova nada sobre isso. O banco
+como serviço do CI é mais simples e mais rápido que Testcontainers para um único banco, e o
+`docker-compose.yml` do enunciado já dá o mesmo ambiente localmente. O Kafka fica fora desta
+suíte porque o assunto dela é o serviço HTTP; o fluxo com o broker real tem a sua própria
+suíte junto com os consumidores. A configuração da borda é compartilhada para que o teste
+não passe com um pipe ou filtro diferente do que roda em produção.
