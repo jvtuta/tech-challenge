@@ -34,6 +34,10 @@ export class EnvConfigService implements EnvConfig {
     return this.required('KAFKA_CLIENT_ID');
   }
 
+  getKafkaGroupId(): string {
+    return this.required('KAFKA_GROUP_ID_TRANSACTIONS');
+  }
+
   private required(key: string): string {
     const value = this.configService.get<string>(key)?.trim();
     if (!value) {

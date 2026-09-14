@@ -3,4 +3,5 @@ export interface EnvConfig {
   getDatabaseUrl(): string;
   getKafkaBrokers(): string[];
   getKafkaClientId(): string;
+  getKafkaGroupId(): string;
 }
