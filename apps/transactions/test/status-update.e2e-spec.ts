@@ -1,3 +1,4 @@
+import { get } from 'node:http';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { createEnvelope, TOPICS } from '@tech-challenge/contracts';
@@ -26,6 +27,30 @@ async function waitForStableGroup(admin: Admin, groupId: string): Promise<void> 
   } finally {
     await admin.disconnect();
   }
+}
+
+/** Lê um stream SSE até o evento terminal ou o fechamento; devolve os `data` na ordem. */
+function readStatusEvents(url: string): Promise<{ events: unknown[]; closed: boolean }> {
+  return new Promise((resolve, reject) => {
+    const events: unknown[] = [];
+    const timer = setTimeout(() => reject(new Error(`SSE ${url} still open after 30s`)), 30_000);
+    get(url, (response) => {
+      let buffer = '';
+      response.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString();
+        for (const line of buffer.split('\n')) {
+          if (line.startsWith('data:')) {
+            events.push(JSON.parse(line.slice(5).trim()));
+          }
+        }
+        buffer = buffer.slice(buffer.lastIndexOf('\n') + 1);
+      });
+      response.on('end', () => {
+        clearTimeout(timer);
+        resolve({ events, closed: true });
+      });
+    }).on('error', reject);
+  });
 }
 
 const validBody = {
@@ -62,6 +87,7 @@ describe('status update (e2e, Kafka real)', () => {
     });
     await app.startAllMicroservices();
     await app.init();
+    await app.listen(0);
     // O transporte do NestJS registra o consumer com o sufixo `-server` no grupo configurado.
     await waitForStableGroup(kafka.admin(), `${envConfig.getKafkaGroupId()}-server`);
     await app.get(PrismaService).transaction.deleteMany();
@@ -128,6 +154,43 @@ describe('status update (e2e, Kafka real)', () => {
 
     await publishVerdict(body.transactionExternalId, 'approved');
     await expect(waitForStatus(body.transactionExternalId, 'approved')).resolves.toBe('approved');
+  });
+
+  it('streams the current status, then the verdict, and closes at the terminal state', async () => {
+    const { body } = await request(app.getHttpServer())
+      .post('/transactions')
+      .send(validBody)
+      .expect(201);
+    const id: string = body.transactionExternalId;
+    const url = `${await app.getUrl()}/transactions/${id}/events`;
+
+    const reading = readStatusEvents(url);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await publishVerdict(id, 'approved');
+
+    const { events, closed } = await reading;
+    expect(events).toEqual([
+      { transactionExternalId: id, status: 'pending' },
+      { transactionExternalId: id, status: 'approved' },
+    ]);
+    expect(closed).toBe(true);
+  });
+
+  it('closes immediately with the final status when the transaction is already settled', async () => {
+    const { body } = await request(app.getHttpServer())
+      .post('/transactions')
+      .send(validBody)
+      .expect(201);
+    const id: string = body.transactionExternalId;
+    await publishVerdict(id, 'rejected');
+    await expect(waitForStatus(id, 'rejected')).resolves.toBe('rejected');
+
+    const { events, closed } = await readStatusEvents(
+      `${await app.getUrl()}/transactions/${id}/events`,
+    );
+
+    expect(events).toEqual([{ transactionExternalId: id, status: 'rejected' }]);
+    expect(closed).toBe(true);
   });
 
   it('keeps the first verdict when a conflicting one arrives later', async () => {
