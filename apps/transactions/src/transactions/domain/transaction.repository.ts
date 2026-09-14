@@ -1,9 +1,7 @@
+import type { PersistenceContext } from '../../shared/application/unit-of-work';
 import type { Transaction } from './transaction';
 
-/** Contexto de persistência de uma unidade de trabalho (a transação do banco, no Prisma). */
-export interface PersistenceContext {
-  readonly kind: 'persistence-context';
-}
+export type { PersistenceContext };
 
 export interface TransactionRepository {
   save(transaction: Transaction, context: PersistenceContext): Promise<void>;

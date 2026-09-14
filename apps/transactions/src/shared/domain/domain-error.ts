@@ -1,10 +1,12 @@
 /**
- * Erro de negócio. Carrega o status HTTP que o filtro global usa na borda, para que o
- * domínio e a aplicação não dependam de exceções do NestJS.
+ * Categoria semântica do erro de negócio. Cada borda traduz para o seu protocolo: o filtro
+ * HTTP escolhe o status; um consumidor de mensagens decide entre descartar e reprocessar.
  */
+export type DomainErrorKind = 'invalid' | 'not-found' | 'unavailable';
+
 export abstract class DomainError extends Error {
   abstract readonly code: string;
-  abstract readonly httpStatus: number;
+  abstract readonly kind: DomainErrorKind;
 
   protected constructor(message: string) {
     super(message);

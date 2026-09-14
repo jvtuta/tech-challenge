@@ -1,11 +1,8 @@
-import type { UnitOfWork } from '../application/unit-of-work';
+import type { Snapshotable } from '../../shared/testing/in-memory-unit-of-work';
 import type { Transaction } from '../domain/transaction';
-import type { PersistenceContext, TransactionRepository } from '../domain/transaction.repository';
+import type { TransactionRepository } from '../domain/transaction.repository';
 
-const context: PersistenceContext = { kind: 'persistence-context' };
-
-/** Repositório em memória com a mesma semântica transacional do Prisma: falhou, desfaz. */
-export class InMemoryTransactionRepository implements TransactionRepository, UnitOfWork {
+export class InMemoryTransactionRepository implements TransactionRepository, Snapshotable {
   private rows = new Map<string, Transaction>();
 
   async save(transaction: Transaction): Promise<void> {
@@ -16,14 +13,11 @@ export class InMemoryTransactionRepository implements TransactionRepository, Uni
     return this.rows.get(transactionExternalId) ?? null;
   }
 
-  async run<T>(work: (context: PersistenceContext) => Promise<T>): Promise<T> {
-    const snapshot = new Map(this.rows);
-    try {
-      return await work(context);
-    } catch (error) {
-      this.rows = snapshot;
-      throw error;
-    }
+  snapshot(): () => void {
+    const copy = new Map(this.rows);
+    return () => {
+      this.rows = copy;
+    };
   }
 
   get size(): number {
