@@ -17,6 +17,38 @@ revisada no mesmo PR que muda produtor e consumidor. Repositórios separados exi
 o pacote de contratos para sincronizar. Turborepo traria cache e paralelismo, mas com três
 pacotes pequenos o ganho não paga a camada extra de configuração para explicar.
 
+## Arquitetura dos serviços: hexagonal enxuta
+
+**Decisão:** cada serviço NestJS é organizado por módulo de negócio (`transactions`,
+`anti-fraud`), e dentro dele em três camadas: `domain` (entidade, objetos de valor, regra
+pura e a interface do repositório), `application` (casos de uso, que orquestram domínio,
+unidade de trabalho e publicação de eventos por portas) e `infrastructure` (controllers
+HTTP, controllers Kafka, SSE, repositório Prisma). O que é transversal fica em `shared` com
+as mesmas três camadas: erro de negócio com categoria semântica, unidade de trabalho,
+configuração, Prisma e o filtro que traduz erro em HTTP. A dependência aponta sempre para
+dentro: o domínio não conhece Nest nem Prisma; a aplicação conhece só as portas; a
+infraestrutura implementa as portas e é a única que conhece o framework. Não há barramento
+de comandos, eventos de domínio internos nem agregado com classe base: a entidade é uma
+classe simples com os métodos que a regra pede.
+
+**Alternativas consideradas:** a organização padrão do NestJS (controller, service e
+repositório por módulo, com o service concentrando regra e acesso a dados); a versão completa
+do que uso em outros projetos (agregado com classe base, eventos de domínio, mediador de
+comandos e consultas, mappers entre entidade e modelo); arquitetura em camadas por tipo de
+arquivo (todos os controllers em uma pasta, todos os services em outra).
+
+**Por quê:** é a estrutura que eu uso nos serviços em que trabalhei, reduzida ao que este
+problema exige. O ganho que me interessa é testar a regra e os casos de uso sem subir o Nest
+nem o banco: o caso de uso de criação roda com um repositório em memória e um publisher em
+memória, e o caminho triste do broker é um teste unitário de milissegundos. A organização
+padrão do NestJS mistura regra e persistência no service, e o teste do sad path passa a
+exigir mock do Prisma. A versão completa, com mediador e eventos de domínio internos, é o
+que eu montaria para um contexto com vários agregados e muitas reações a um mesmo evento;
+aqui há uma entidade e duas transições, e cada peça a mais seria uma peça a explicar sem
+ninguém a usar. Organizar por tipo de arquivo espalha uma funcionalidade por pastas
+distantes e esconde a direção das dependências, que é o que a arquitetura existe para
+mostrar.
+
 ## Ferramentas de qualidade na raiz
 
 **Decisão:** ESLint (flat config), Prettier, Jest e TypeScript configurados uma vez na raiz;
@@ -453,7 +485,7 @@ já existe no código:
 leitura separado e cache de listagem desde já; sharding por conta.
 
 **Por quê:** em produção financeira o gargalo raramente está onde a intuição aponta; no
-gateway de pagamentos em que trabalho, o primeiro limite real foi o pool de conexões, não o
+gateway de pagamentos em que trabalhei, o primeiro limite real foi o pool de conexões, não o
 banco nem a fila. Cada passo acima é reversível e cabe em uma PR, porque as fronteiras já
 estão no lugar: read model separado da escrita, publicação atrás de uma porta, consumers
 idempotentes por construção. CQRS completo e sharding resolvem problemas que este volume
