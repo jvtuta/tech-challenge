@@ -112,3 +112,50 @@ resolveria o desacoplamento, mas introduziria uma segunda máquina de eventos, e
 para explicar ao lado da do Kafka. Uma função simples bastaria funcionalmente; a forma fluente
 foi escolhida porque lê como a regra de negócio nos casos de uso e nos testes, e porque o
 publisher em memória permite testar o caminho triste (broker fora) sem infraestrutura.
+
+## Criação de transação: gravar e publicar na mesma unidade de trabalho
+
+**Decisão:** `POST /transactions` grava a transação como `pending` e publica
+`transaction.created` dentro da mesma transação do banco. Se a publicação falhar, a gravação é
+desfeita e o cliente recebe `503` com o código `EVENT_PUBLISH_FAILED`. O caso de uso depende
+de três portas (`TransactionRepository`, `UnitOfWork`, `EventPublisher`) e é testado com
+adapters em memória, inclusive o caminho em que o broker está fora.
+
+**Alternativas consideradas:** gravar e depois publicar sem transação, aceitando que uma falha
+deixe a transação pendente para sempre; outbox transacional, com uma tabela de eventos
+pendentes e um relay publicando em segundo plano; publicar primeiro e gravar depois.
+
+**Por quê:** uma transação `pending` que o antifraude nunca vai avaliar é o pior estado
+possível para o cliente, porque parece válida e nunca muda. Recusar a criação é honesto e
+imediato. O outbox é a solução mais robusta (sobrevive a quedas entre gravar e publicar sem
+segurar a transação do banco) e é o próximo passo natural se a taxa de falha do broker
+justificar; hoje custaria uma tabela, um relay e a limpeza dele para um cenário que a
+transação do banco já cobre. Publicar antes de gravar geraria eventos para transações que
+podem não existir.
+
+## Leituras fora dos casos de uso
+
+**Decisão:** consultas (`TransactionQueries`) leem o Prisma direto e devolvem o contrato
+HTTP pronto, sem passar pela entidade. Os casos de uso existem só para escritas, onde há
+invariante e evento.
+
+**Alternativas consideradas:** um caso de uso por operação, inclusive `GET`; reaproveitar o
+repositório de escrita para as consultas.
+
+**Por quê:** uma consulta não tem regra de negócio: um caso de uso ali só repassaria a chamada.
+O repositório de escrita hidrata a entidade para aplicar regras; a listagem paginada não
+precisa disso e pagar a hidratação por linha de dashboard seria custo sem função. Se entrar
+autorização por conta, ela é regra, e aí um caso de uso de leitura passa a fazer sentido.
+
+## Erros de negócio sem exceções do framework
+
+**Decisão:** domínio e aplicação lançam subclasses de `DomainError`, que carregam um código
+e o status HTTP; um filtro global na borda traduz para a resposta. Validação de formato fica
+no DTO com `class-validator`; validação de regra fica no domínio (`TransactionValue`).
+
+**Alternativas consideradas:** lançar `HttpException` do NestJS de dentro do caso de uso;
+validar tudo no DTO.
+
+**Por quê:** o caso de uso não deve saber que existe HTTP; o mesmo código será chamado pelo
+consumidor Kafka, onde `503` não significa nada. Separar formato de regra evita que a regra
+de negócio dependa de decorators e permite testá-la sem subir o Nest.
