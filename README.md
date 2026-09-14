@@ -1,220 +1,175 @@
-# Desafio Técnico BIUD — Fullstack
+# Transações com antifraude assíncrono
 
-Bem-vindo. Este desafio existe para que você mostre como pensa, decide e organiza código em
-um cenário próximo do que fazemos aqui: uma API orientada a eventos e uma interface que
-precisa lidar com dados que mudam depois que a tela já foi renderizada.
+Uma API de transações financeiras em NestJS que grava cada transação como pendente, publica
+um evento no Kafka, recebe o veredito de um microsserviço antifraude e atualiza o status; um
+dashboard em Next.js que lista, filtra, cria e acompanha a mudança de status sem recarregar a
+tela. Monorepo pnpm com dois serviços, um dashboard e dois pacotes compartilhados.
 
-O repositório vem praticamente vazio de propósito. Montar o projeto — workspace, tooling,
-padrões, integração contínua — faz parte do desafio, porque faz parte do trabalho.
+As decisões de arquitetura, com as alternativas consideradas e a resposta sobre volume alto de
+escritas e leituras, estão no [DECISIONS.md](./DECISIONS.md).
 
-Leia o [PRACTICES.md](./PRACTICES.md) antes de começar: o que está lá são requisitos, não
-sugestões.
+- [O que foi construído](#o-que-foi-construído)
+- [Como rodar](#como-rodar)
+- [Como testar](#como-testar)
+- [Como usar a API](#como-usar-a-api)
+- [Estrutura do repositório](#estrutura-do-repositório)
+- [O que ficou de fora](#o-que-ficou-de-fora)
 
-- [O problema](#o-problema)
-- [Contratos](#contratos)
-- [O que você precisa entregar](#o-que-você-precisa-entregar)
-- [O que já vem no repositório](#o-que-já-vem-no-repositório)
-- [Stack](#stack)
-- [Subindo a infraestrutura](#subindo-a-infraestrutura)
-- [Defesa do código](#defesa-do-código)
-- [Como entregar](#como-entregar)
-
----
-
-## O problema
-
-Toda transação financeira criada precisa ser validada por um microserviço antifraude. Esse
-serviço avalia a transação e devolve o resultado, que atualiza o status do registro
-original.
-
-Uma transação tem três status possíveis: **pendente**, **aprovada** e **rejeitada**. Toda
-transação com valor **acima de 1000** deve ser rejeitada; as demais são aprovadas.
+## O que foi construído
 
 ```mermaid
 flowchart LR
-  Transaction -- Salva com status pendente --> DB[(Database)]
-  Transaction -- Evento transaction.created --> AntiFraud[Anti-Fraud]
-  AntiFraud -- Evento transaction.status.updated --> Transaction
-  Transaction -- Atualiza o status --> DB
+  Web[Dashboard Next.js] -- HTTP e SSE --> Tx[transactions NestJS]
+  Tx -- grava pendente --> DB[(Postgres)]
+  Tx -- transaction.created --> K[(Kafka)]
+  K -- transaction.created --> AF[anti-fraud NestJS]
+  AF -- transaction.status.updated --> K
+  K -- transaction.status.updated --> Tx
+  Tx -- aprova ou rejeita --> DB
 ```
 
-A comunicação entre os dois serviços é feita por **Kafka**. A chamada de criação não pode
-esperar o resultado da validação: a transação nasce `pendente` e muda de status depois, de
-forma assíncrona.
+**`apps/transactions`**: `POST /transactions` valida o corpo, grava a transação como
+`pending` e, depois do commit, publica `transaction.created` com a chave igual ao id externo.
+Se o broker recusar, a resposta continua sendo `201` e um varredor republica o evento das
+pendentes com mais de 10 segundos, a cada 5 segundos. O consumer de
+`transaction.status.updated` aplica o veredito só a partir de `pending`, então um evento
+duplicado não muda nada. `GET /transactions/:id` devolve uma transação, `GET /transactions`
+lista com filtros, paginação e ordenação, e `GET /transactions/:id/events` é um stream
+Server-Sent Events que entrega o status atual e cada mudança até o estado final.
 
-## Contratos
+**`apps/anti-fraud`**: consome `transaction.created`, aplica a regra (valor acima de 1000
+rejeita, 1000 exato aprova) por uma função pura e publica `transaction.status.updated`.
+Eventos fora do contrato são descartados com log; falhas de infraestrutura são
+reprocessadas. `GET /health` responde pela conexão real com o Kafka.
 
-### Criar uma transação
+**`apps/web`**: listagem paginada com filtros por status, tipo, período e ordenação; detalhe
+que assina o stream SSE enquanto a transação está pendente e mostra o veredito assim que
+chega; formulário de criação validado com as mesmas regras do serviço, com um gerador de UUID
+em cada campo de conta. Carregando, erro e vazio são componentes explícitos, alcançáveis por
+papel acessível, e é por papel que os testes consultam a tela.
 
-```json
-{
-  "accountExternalIdDebit": "Guid",
-  "accountExternalIdCredit": "Guid",
-  "transferTypeId": 1,
-  "value": 120
-}
-```
+**`packages/contracts`**: tipos do contrato HTTP, nomes dos tópicos, envelope versionado dos
+eventos e o schema `zod` que valida o que chega do Kafka. **`packages/messaging`**: porta de
+publicação, interface fluente (`dispatch(publisher).event(t).keyedBy(k).with(d).publish()`),
+adapter KafkaJS com falha rápida, publisher em memória para testes e a criação dos tópicos
+no boot de cada serviço.
 
-### Recuperar uma transação
+Medido na máquina local: o veredito fica visível entre 10 e 40 ms depois do `POST`; com o
+broker fora do ar, o `POST` responde em cerca de 300 ms.
 
-```json
-{
-  "transactionExternalId": "Guid",
-  "transactionType": { "name": "" },
-  "transactionStatus": { "name": "" },
-  "value": 120,
-  "createdAt": "Date"
-}
-```
+## Como rodar
 
-### Eventos
-
-Estes são os dois eventos do fluxo. O formato do payload é decisão sua — só precisa ser
-consistente entre quem publica e quem consome.
-
-| Evento                       | Publicado por  | Consumido por  |
-| ---------------------------- | -------------- | -------------- |
-| `transaction.created`        | `transactions` | `anti-fraud`   |
-| `transaction.status.updated` | `anti-fraud`   | `transactions` |
-
-## O que você precisa entregar
-
-### Fundação do projeto
-
-Você começa do zero. Espera-se que monte:
-
-- A estrutura do projeto — monorepo ou repositórios separados por serviço, a escolha é sua
-- TypeScript configurado
-- Lint e formatação, rodando também como hook de pre-commit
-- Validação de mensagem de commit (Conventional Commits)
-- Um comando único que roda todo o quality gate
-- Integração contínua no GitHub Actions, executando esse mesmo quality gate e **verde ao final**
-
-O [PRACTICES.md](./PRACTICES.md) detalha o que cada um desses itens precisa cobrir.
-
-### Backend
-
-- Endpoint de criação de transação, gravando com status `pendente` e publicando o evento de criação
-- Endpoint de consulta de uma transação pelo identificador externo
-- Endpoint de listagem paginada, com filtros por status, tipo e período — é o que alimenta o dashboard
-- Serviço antifraude consumindo o evento de criação, aplicando a regra e publicando o resultado
-- Consumo do evento de retorno no serviço de transações, atualizando o status
-- Modelagem de dados e migrations versionadas
-
-### Frontend
-
-Um dashboard sobre essa API, com:
-
-- **Listagem** paginada, com filtros por status, tipo e período
-- **Detalhe** de uma transação
-- **Criação** de transação por formulário, com validação
-- **Estados de tela** tratados explicitamente: carregando, erro e lista vazia
-
-Repare que a transação aparece como `pendente` e muda de status fora do ciclo de request do
-usuário. Como a interface reflete essa mudança é decisão sua — e queremos ler o porquê dela.
-
-### Testes
-
-Testes automatizados cobrindo as regras de negócio no backend e as telas principais no
-frontend.
-
-### DECISIONS.md
-
-Crie um `DECISIONS.md` na raiz. Para **cada decisão estruturante** — organização do projeto,
-modelagem de dados, formato dos eventos, tratamento de falha na mensageria, atualização do
-status na interface, estratégia de testes — registre:
-
-1. Qual foi a decisão
-2. Que alternativas você considerou
-3. Por que escolheu essa
-
-Inclua também sua resposta para esta pergunta:
-
-> A aplicação pode precisar lidar com um volume alto de escritas e leituras concorrentes.
-> Como você abordaria esse requisito?
-
-Não precisa implementar a resposta — precisa defendê-la.
-
-Uma decisão sem alternativa considerada não é uma decisão, é um acidente. É o **porquê** que
-nos interessa.
-
-### README do seu projeto
-
-Substitua este README pelo seu: o que você construiu, como rodar, como testar e o que ficou
-de fora. Quem clona o seu repositório precisa conseguir subir tudo sem perguntar nada.
-
-## O que já vem no repositório
-
-Só a infraestrutura local, para que todo mundo desenvolva contra os mesmos serviços:
-
-| Arquivo                                 | Para quê                                      |
-| --------------------------------------- | --------------------------------------------- |
-| `docker-compose.yml`                    | Postgres, Kafka e Kafka UI                    |
-| `.env.example`                          | Variáveis de ambiente do ambiente local       |
-| `.editorconfig`, `.gitignore`, `.nvmrc` | Convenções básicas de editor e versão do Node |
-| `.github/pull_request_template.md`      | Template de PR                                |
-
-Todo o resto é seu. Nada aqui é intocável: se sua arquitetura pedir outra coisa, mude — e
-registre o porquê no `DECISIONS.md`.
-
-## Stack
-
-O uso desta stack é obrigatório, porque é a que usamos aqui:
-
-| Camada                 | Tecnologia                                     |
-| ---------------------- | ---------------------------------------------- |
-| Runtime                | Node.js 22+                                    |
-| Gerenciador de pacotes | pnpm                                           |
-| Backend                | NestJS + TypeScript                            |
-| ORM                    | Prisma                                         |
-| Banco                  | PostgreSQL                                     |
-| Mensageria             | Kafka                                          |
-| Frontend               | Next.js + React + Tailwind                     |
-| Testes                 | À sua escolha, desde que rodem no quality gate |
-
-Dentro dessa stack, a organização do código é sua: paradigma, camadas, modularização e
-estilo ficam a seu critério.
-
-## Subindo a infraestrutura
+Pré-requisitos: Node 22 (`.nvmrc`), pnpm 10 ou superior e Docker.
 
 ```bash
 cp .env.example .env
 docker compose up -d
+pnpm install
+pnpm db:migrate
 ```
 
-Serviços disponíveis depois disso:
+Isso sobe Postgres, Kafka e Kafka UI, instala as dependências, gera o cliente Prisma e aplica
+as migrations (que também semeiam os tipos de transferência: 1 transferência, 2 pagamento,
+3 saque). Os tópicos do Kafka são criados pelos serviços ao subir.
 
-| Serviço  | Endereço              |
-| -------- | --------------------- |
-| Postgres | `localhost:5432`      |
-| Kafka    | `localhost:9092`      |
-| Kafka UI | http://localhost:8080 |
+Depois, em três terminais:
 
-As portas das suas aplicações ficam a seu critério; o `.env.example` sugere 3001 para a API
-de transações, 3002 para o antifraude e 3000 para o dashboard.
+```bash
+pnpm --filter @tech-challenge/transactions start:dev   # http://localhost:3001
+pnpm --filter @tech-challenge/anti-fraud start:dev     # http://localhost:3002/health
+pnpm --filter @tech-challenge/web dev                  # http://localhost:3000
+```
 
-## Defesa do código
+As portas vêm do `.env`; nenhum serviço tem host ou porta em código. O Kafka UI fica em
+http://localhost:8080 para inspecionar os tópicos.
 
-Depois da entrega, conversamos sobre o código. Você vai percorrer as escolhas do
-`DECISIONS.md`, explicar por que cada uma foi feita e o que mudaria com outros requisitos.
+## Como testar
 
-Usar IA no dia a dia é normal e aqui também é — não é isso que estamos medindo. O que
-avaliamos é se você entende, sustenta e consegue mudar aquilo que entregou. Código que você
-não sabe explicar não conta a seu favor, tenha vindo de onde tiver vindo.
+```bash
+pnpm quality        # lint, typecheck, format:check, test e build, na ordem; é o que o CI roda
+pnpm test           # só os testes: 103 no total
+```
 
-## Como entregar
+Os testes de ponta a ponta dos serviços usam o Postgres e o Kafka do `docker compose`, lendo
+o mesmo `.env`; a infra precisa estar de pé. Os testes unitários e os do dashboard não
+dependem de nada externo.
 
-1. Faça um **fork** deste repositório
-2. Desenvolva no seu fork, com commits incrementais, seguindo o [PRACTICES.md](./PRACTICES.md)
-3. Compartilhe o fork com os avaliadores, em **Settings → Collaborators**:
+```bash
+pnpm --filter @tech-challenge/transactions test:unit                        # sem infra
+pnpm --filter @tech-challenge/transactions exec jest --selectProjects e2e   # com infra
+pnpm --filter @tech-challenge/web test
+pnpm --filter @tech-challenge/anti-fraud exec jest -t "1000"                # por nome
+```
 
-   - alex.silveira@biud.com.br
-   - marcelo.oliveira@biud.com.br
-   - gustavofarias@biud.com.br
+O que cada suíte cobre:
 
-4. Avise a conclusão por e-mail dentro do prazo de **5 dias corridos**
+- **transactions** (58): entidade e transição de status; criação com publicação após o
+  commit e com o broker recusando; varredor de pendentes; consumer de status idempotente e
+  veredito órfão; listagem com filtros, ordenação e paginação; SSE até o estado final;
+  filtro de erros de negócio; health.
+- **anti-fraud** (18): regra na fronteira (999.99, 1000, 1000.01); consumer publicando o
+  veredito com a chave certa; descarte de evento fora do contrato; health com o broker fora.
+- **messaging** (15) e **contracts** (2): interface fluente, envelope, validação e
+  publisher em memória.
+- **web** (10): três estados da listagem e a tabela; validação, gerador de UUID e envio do
+  formulário; detalhe reagindo ao SSE e 404; boundary de erro.
 
-Ficou alguma dúvida sobre o enunciado? Pergunte — tirar dúvida faz parte do processo e não
-conta contra você.
+O CI (`.github/workflows/quality.yml`) sobe Postgres e Kafka de verdade e roda exatamente
+`pnpm quality`.
 
-Boa sorte.
+## Como usar a API
+
+```bash
+# criar (nasce pendente; o veredito chega pelo Kafka em milissegundos)
+curl -s -X POST http://localhost:3001/transactions \
+  -H 'content-type: application/json' \
+  -d '{"accountExternalIdDebit":"9b2f1c3e-5a4d-4e6f-8a7b-1c2d3e4f5a6b","accountExternalIdCredit":"1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","transferTypeId":1,"value":120}'
+
+# consultar
+curl -s http://localhost:3001/transactions/<transactionExternalId>
+
+# listar: status, transferTypeId, from, to (ISO-8601), page, pageSize (máximo 100), sort (createdAt ou value), sortDir
+curl -s 'http://localhost:3001/transactions?status=approved&pageSize=5&sort=value&sortDir=desc'
+
+# acompanhar o status até o estado final
+curl -N http://localhost:3001/transactions/<transactionExternalId>/events
+```
+
+Respostas de erro: `400` para corpo ou filtro fora do formato, `404` para id desconhecido,
+`422` para regra de negócio (tipo de transferência inexistente), `503` quando uma
+dependência está indisponível.
+
+## Estrutura do repositório
+
+```
+apps/
+  transactions/   API e consumer de status; domain, application e infrastructure por módulo,
+                  shared para o que é transversal (unidade de trabalho, erros, config, Prisma)
+  anti-fraud/     consumer da regra; mesma organização
+  web/            dashboard; features/transactions e shared, App Router
+packages/
+  contracts/      tipos, tópicos, envelope e schema dos eventos
+  messaging/      porta de publicação, interface fluente, adapter Kafka e publisher em memória
+.github/          workflow de CI e template de PR
+```
+
+Tudo entrou por PRs pequenas para `develop`, uma responsabilidade por branch, com o
+`DECISIONS.md` crescendo na mesma PR em que a decisão foi tomada.
+
+## O que ficou de fora
+
+Cada item abaixo tem o porquê e o momento em que entraria no `DECISIONS.md`.
+
+- **Outbox transacional e fila de mensagens envenenadas**: o varredor de pendentes cobre a
+  falha de publicação com menos partes; o outbox entra quando o volume pedir recuperação em
+  milissegundos, e uma fila própria quando houver o que fazer com o evento descartado além
+  do log.
+- **Listagem em tempo real**: só o detalhe assina o SSE; a listagem consulta ao filtrar ou
+  paginar. Um stream global da listagem exige fan-out fora da memória do processo quando
+  houver mais de uma réplica.
+- **Autenticação e autorização**: a API aceita qualquer origem e não há sessão no
+  dashboard.
+- **OpenAPI, Playwright, histórico de status, cache**: não fazem parte do problema neste
+  recorte; a entrada "O recorte da vaga" no `DECISIONS.md` diz quando cada um valeria.
+- **Empacotamento para produção**: não há Dockerfile dos serviços nem deploy; o
+  `docker compose` cobre só a infraestrutura local.
