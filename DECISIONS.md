@@ -342,3 +342,20 @@ uma tabela, um relay e a limpeza dele; ou inverter a ordem, commit antes de publ
 um varredor que republica o `created` de transações pendentes há mais de N segundos, que aceita
 a falha mas a torna recuperável com menos infraestrutura. Com o volume do enunciado, o varredor
 bastaria; com volume alto e vários produtores, o outbox é o caminho.
+
+## Listagem paginada por página, com limite de tamanho
+
+**Decisão:** `GET /transactions` aceita `status`, `transferTypeId`, `from`, `to`, `page` e
+`pageSize` (padrão 20, máximo 100) e devolve `{ items, page, pageSize, total }`, do mais
+recente para o mais antigo. A consulta vive no read model, com `findMany` e `count` na mesma
+transação do Prisma, e os filtros são exatamente os índices compostos criados na modelagem.
+
+**Alternativas consideradas:** paginação por cursor (`createdAt` + id); devolver a lista sem
+`total`; deixar `pageSize` sem limite.
+
+**Por quê:** o dashboard mostra "página X de Y" e precisa do total; `offset` com `total` é o
+que a tela pede e é barato no volume do enunciado. Cursor é mais estável sob inserção
+concorrente e mais eficiente em páginas profundas, e é o caminho se o volume crescer, mas
+não permite pular para uma página arbitrária, que é o que a interface oferece. O limite de
+100 impede que um único pedido leia a tabela inteira. `total` na mesma transação garante
+que a página e a contagem sejam do mesmo instante.
