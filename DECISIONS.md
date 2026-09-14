@@ -291,3 +291,30 @@ memória).
 **Por quê:** um health fixo diz que o processo está vivo, não que ele consegue fazer o único
 trabalho que tem, e para um consumer isso é alcançar o broker. Sem HTTP, Docker e Kubernetes
 não teriam como saber. Indicadores alheios ao trabalho do serviço só acrescentam ruído.
+
+## Atualização de status idempotente, a partir de `pending`
+
+**Decisão:** o veredito do antifraude é aplicado pelo caso de uso `UpdateTransactionStatus`,
+que carrega a transação e chama `settle(status)` no domínio. Só uma transação `pending`
+muda; o mesmo veredito entregue de novo não altera nada e não grava; um veredito diferente
+sobre uma transação já decidida é recusado (`TransactionAlreadySettledError`), porque o
+primeiro veredito é o que valeu. No consumer Kafka do serviço de transações, a categoria do erro
+decide o destino da mensagem: erro de negócio determinístico (`invalid`, como o conflito;
+`not-found`, depois de uma espera curta de três tentativas, porque o veredito pode chegar
+antes de a gravação da transação ficar visível) é descartado com log; qualquer outro erro sobe
+para o transporte reentregar.
+
+**Alternativas consideradas:** sobrescrever o status a cada evento recebido; guardar os
+`eventId` já processados em uma tabela e descartar repetidos antes de tocar na transação;
+tratar conflito como sobrescrita pelo mais recente.
+
+**Por quê:** o Kafka entrega ao menos uma vez, então a duplicata é caso normal, não exceção,
+e a máquina de estados da transação já é a chave de idempotência: `pending` é o único estado
+que aceita veredito, e o resultado da segunda entrega é idêntico ao da primeira. Uma tabela
+de eventos processados resolve o mesmo problema com uma escrita a mais por mensagem e
+limpeza periódica; ela passa a valer quando houver evento sem estado terminal para se apoiar.
+Sobrescrever pelo mais recente faria uma reentrega fora de ordem reverter uma decisão, e a
+recusa explícita deixa o conflito visível no log em vez de escondido. Reprocessar um erro
+determinístico daria o mesmo resultado a cada tentativa e travaria a partição em uma única
+mensagem; foi o que aconteceu no primeiro teste de ponta a ponta desta entrega, com vereditos
+antigos para transações inexistentes, e é o motivo de a categoria do erro decidir o destino.
