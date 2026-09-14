@@ -6,22 +6,6 @@ export const TOPICS = {
   TRANSACTION_STATUS_UPDATED: 'transaction.status.updated',
 } as const;
 
-export type TopicName = (typeof TOPICS)[keyof typeof TOPICS];
-
-/**
- * Envelope comum a todos os eventos. `eventId` permite ao consumidor detectar duplicatas
- * (entrega at-least-once) e `version` permite evoluir o payload sem quebrar consumidores
- * antigos. A chave da mensagem no Kafka é sempre `transactionExternalId`, para que todos os
- * eventos de uma mesma transação caiam na mesma partição e sejam processados em ordem.
- */
-export interface EventEnvelope<TType extends TopicName, TData> {
-  eventId: string;
-  eventType: TType;
-  version: 1;
-  occurredAt: string;
-  data: TData;
-}
-
 export interface TransactionCreatedData {
   transactionExternalId: string;
   value: number;
@@ -32,28 +16,46 @@ export interface TransactionStatusUpdatedData {
   status: Exclude<TransactionStatus, 'pending'>;
 }
 
-export type TransactionCreatedEvent = EventEnvelope<
-  typeof TOPICS.TRANSACTION_CREATED,
-  TransactionCreatedData
->;
+/** Fonte única do contrato: cada tópico e o payload que ele carrega. */
+export interface TopicPayloads {
+  [TOPICS.TRANSACTION_CREATED]: TransactionCreatedData;
+  [TOPICS.TRANSACTION_STATUS_UPDATED]: TransactionStatusUpdatedData;
+}
 
-export type TransactionStatusUpdatedEvent = EventEnvelope<
-  typeof TOPICS.TRANSACTION_STATUS_UPDATED,
-  TransactionStatusUpdatedData
->;
+export type TopicName = keyof TopicPayloads;
 
-export type TransactionEvent = TransactionCreatedEvent | TransactionStatusUpdatedEvent;
+export type PayloadOf<TTopic extends TopicName> = TopicPayloads[TTopic];
+
+/**
+ * Envelope comum a todos os eventos. `eventId` permite ao consumidor detectar duplicatas
+ * (entrega at-least-once) e `version` permite evoluir o payload sem quebrar consumidores
+ * antigos. A chave da mensagem no Kafka é sempre `transactionExternalId`, para que todos os
+ * eventos de uma mesma transação caiam na mesma partição e sejam processados em ordem.
+ */
+export interface EventEnvelope<TTopic extends TopicName = TopicName> {
+  eventId: string;
+  eventType: TTopic;
+  version: 1;
+  occurredAt: string;
+  data: PayloadOf<TTopic>;
+}
+
+export type TransactionCreatedEvent = EventEnvelope<typeof TOPICS.TRANSACTION_CREATED>;
+export type TransactionStatusUpdatedEvent = EventEnvelope<typeof TOPICS.TRANSACTION_STATUS_UPDATED>;
+
+/** União de todos os eventos, derivada do mapa: um tópico novo entra aqui sozinho. */
+export type TransactionEvent = { [TTopic in TopicName]: EventEnvelope<TTopic> }[TopicName];
 
 export interface EnvelopeOptions {
   eventId?: string;
   occurredAt?: Date;
 }
 
-export function createEnvelope<TType extends TopicName, TData>(
-  eventType: TType,
-  data: TData,
+export function createEnvelope<TTopic extends TopicName>(
+  eventType: TTopic,
+  data: PayloadOf<TTopic>,
   options: EnvelopeOptions = {},
-): EventEnvelope<TType, TData> {
+): EventEnvelope<TTopic> {
   return {
     eventId: options.eventId ?? randomUUID(),
     eventType,

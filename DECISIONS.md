@@ -92,3 +92,23 @@ mas espalham conversão por todo o código. O enum do banco impede um status inv
 contrato HTTP devolve `transactionType.name`; uma tabela permite novos tipos por dado, sem
 deploy, e a migration semeia os iniciais para que o ambiente suba pronto. Os índices seguem
 os filtros da listagem (status, tipo, período) sempre ordenada por data.
+
+## Publicação de eventos com interface fluente
+
+**Decisão:** os casos de uso publicam eventos por uma interface fluente do pacote
+`@tech-challenge/messaging`: `dispatch(publisher).event(tópico).keyedBy(id).with(dados).publish()`.
+A porta `EventPublisher` recebe a mensagem pronta (tópico, chave e envelope); o adapter
+concreto (Kafka em produção, memória nos testes) é escolhido pelo módulo de cada serviço.
+
+**Alternativas consideradas:** chamar o producer do KafkaJS direto no caso de uso; o
+`EventBus` do `@nestjs/cqrs` com handlers que republicam no Kafka; uma função
+`publish(topic, key, data)`.
+
+**Por quê:** a chave da mensagem é a decisão mais importante do fluxo, porque é ela que
+mantém os eventos de uma transação em ordem na mesma partição, e no producer do KafkaJS ela é
+opcional e fácil de esquecer. Na interface fluente a chave é obrigatória por construção e o
+tipo do payload é verificado por tópico em tempo de compilação. O `EventBus` do NestJS
+resolveria o desacoplamento, mas introduziria uma segunda máquina de eventos, em processo,
+para explicar ao lado da do Kafka. Uma função simples bastaria funcionalmente; a forma fluente
+foi escolhida porque lê como a regra de negócio nos casos de uso e nos testes, e porque o
+publisher em memória permite testar o caminho triste (broker fora) sem infraestrutura.
