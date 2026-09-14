@@ -250,7 +250,7 @@ provisionar os tópicos por script fora do serviço; validar o payload com um sc
 **Por quê:** o transporte do NestJS já faz o que o consumer próprio fazia (conexão, grupo,
 assinatura, conversão do JSON) e documenta a semântica que importa: em `@EventPattern`, uma
 exceção não tratada é retriable, o offset não é commitado e o broker reentrega. Manter
-noventa linhas próprias para reproduzir isso seria código a mais para defender sem ganho.
+noventa linhas próprias para reproduzir isso seria código a mais para manter sem ganho.
 O que o transporte não faz, e continua no código, é validar a forma do envelope e garantir
 que o tópico exista antes de assinar. Criação de tópicos no boot serve ao ambiente local e
 ao CI; em produção os tópicos seriam provisionados com partições e retenção definidas. Um
@@ -271,7 +271,7 @@ o que falhou em um tópico de mensagens mortas (DLQ) depois de N tentativas; cap
 erros do handler e seguir.
 
 **Por quê:** reprocessar JSON quebrado não conserta o JSON e trava a partição para sempre;
-descartar com log é o único destino honesto para ele. Já um erro do handler costuma ser
+descartar com log é o único destino para ele. Já um erro do handler costuma ser
 transitório, e reprocessar é o comportamento certo; engolir perderia vereditos. A DLQ é a
 evolução natural para o caso em que um erro do handler não é transitório: ela separa a
 mensagem envenenada sem travar a partição e permite reprocessar depois. Ficou de fora porque
