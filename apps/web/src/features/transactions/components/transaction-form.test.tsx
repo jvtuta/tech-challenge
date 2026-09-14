@@ -7,6 +7,16 @@ const push = jest.fn();
 jest.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
 
 describe('TransactionForm', () => {
+  it('fills an account with a generated uuid', async () => {
+    renderWithQuery(<TransactionForm />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Gerar conta de débito' }));
+
+    expect(
+      screen.getByRole<HTMLInputElement>('textbox', { name: 'Conta de débito' }).value,
+    ).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
   it('validates the fields before calling the API', async () => {
     renderWithQuery(<TransactionForm />);
 

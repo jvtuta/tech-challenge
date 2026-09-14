@@ -2,7 +2,7 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
-import { useForm } from 'react-hook-form';
+import { useForm, type UseFormRegister } from 'react-hook-form';
 import { z } from 'zod';
 import { useCreateTransaction } from '../hooks';
 import { transferTypeOptions } from './transfer-types';
@@ -23,6 +23,36 @@ const schema = z.object({
 
 type FormInput = z.input<typeof schema>;
 type FormOutput = z.output<typeof schema>;
+
+/** Campo de UUID com um gerador no fim, para testar sem precisar de contas reais. */
+function UuidInput({
+  id,
+  register,
+  onGenerate,
+}: {
+  id: string;
+  register: ReturnType<UseFormRegister<FormInput>>;
+  onGenerate: () => void;
+}) {
+  return (
+    <div className="relative">
+      <input
+        id={id}
+        className={`${inputClass} w-full pr-16`}
+        placeholder="UUID da conta"
+        {...register}
+      />
+      <button
+        type="button"
+        onClick={onGenerate}
+        className="absolute inset-y-1 right-1 rounded px-2 text-xs font-medium text-zinc-600 hover:bg-zinc-100"
+        aria-label={`Gerar ${id === 'accountExternalIdDebit' ? 'conta de débito' : 'conta de crédito'}`}
+      >
+        Gerar
+      </button>
+    </div>
+  );
+}
 
 export function TransactionForm() {
   const router = useRouter();
@@ -50,11 +80,12 @@ export function TransactionForm() {
         label="Conta de débito"
         error={errors.accountExternalIdDebit?.message}
       >
-        <input
+        <UuidInput
           id="accountExternalIdDebit"
-          className={inputClass}
-          placeholder="UUID da conta"
-          {...form.register('accountExternalIdDebit')}
+          register={form.register('accountExternalIdDebit')}
+          onGenerate={() =>
+            form.setValue('accountExternalIdDebit', crypto.randomUUID(), { shouldValidate: true })
+          }
         />
       </Field>
       <Field
@@ -62,11 +93,12 @@ export function TransactionForm() {
         label="Conta de crédito"
         error={errors.accountExternalIdCredit?.message}
       >
-        <input
+        <UuidInput
           id="accountExternalIdCredit"
-          className={inputClass}
-          placeholder="UUID da conta"
-          {...form.register('accountExternalIdCredit')}
+          register={form.register('accountExternalIdCredit')}
+          onGenerate={() =>
+            form.setValue('accountExternalIdCredit', crypto.randomUUID(), { shouldValidate: true })
+          }
         />
       </Field>
       <Field id="transferTypeId" label="Tipo" error={errors.transferTypeId?.message}>
