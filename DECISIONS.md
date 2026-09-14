@@ -38,7 +38,7 @@ no dashboard. Cada app expõe `test`; a raiz agrega.
 **Alternativas consideradas:** Vitest.
 
 **Por quê:** Jest é o padrão do NestJS e do Next.js, dispensa configuração de decorators e é
-a ferramenta que a equipe já usa. Vitest é mais rápido, mas exige SWC para
+a ferramenta que eu já uso. Vitest é mais rápido, mas exige SWC para
 `emitDecoratorMetadata` no NestJS; a velocidade não compensa mais uma peça para manter em um
 projeto deste tamanho.
 
@@ -52,7 +52,7 @@ exatamente `pnpm quality`.
 **Alternativas consideradas:** `lefthook`; rodar só o lint no CI e os testes em outro job.
 
 **Por quê:** o que falha localmente tem que falhar no CI, e vice-versa. Um único comando
-garante isso por construção. `husky` é a opção que a equipe já conhece; `lefthook` é mais
+garante isso por construção. `husky` é a opção que eu já uso; `lefthook` é mais
 rápido em repositórios grandes, o que não é o caso aqui.
 
 ## Contratos compartilhados
@@ -424,3 +424,64 @@ store seria camada sem função. Organizar por funcionalidade mantém tudo que m
 mesmo lugar; `shared` só recebe o que já é usado por mais de uma tela. Os testes consultam a
 interface pelo papel acessível, então rótulo, `status` e `alert` são parte do contrato da
 tela, não detalhe visual.
+
+## Volume alto de escritas e leituras concorrentes
+
+**Decisão:** medir antes de mudar, e mudar na ordem em que a medição apontar. Os números que
+eu acompanharia primeiro: latência do `POST` no p99, lag do grupo de consumers do antifraude
+e do de status, quantas transações o varredor republica por passada (é o termômetro da
+publicação falhando), tempo das consultas de listagem por filtro e tamanho do pool do Prisma
+em uso. Com isso em mãos, a sequência que eu seguiria, cada passo local a uma fronteira que
+já existe no código:
+
+1. **Escrita.** O `POST` faz um insert e um produce, sem esperar o veredito; o primeiro
+   limite é o pool do Prisma, dimensionado por réplica. O varredor vira um outbox com relay
+   quando a taxa de falha de publicação ou o custo de varrer a tabela justificarem uma
+   fila própria, sem tocar o caso de uso: a porta `EventPublisher` já isola quem publica.
+2. **Processamento.** `transaction.created` já sai particionado por `transactionExternalId`;
+   escalar o antifraude é aumentar partições e subir consumers até esse número, mantendo a
+   ordem por transação. Réplicas do consumer de status são seguras porque a atualização só
+   acontece a partir de `pending`.
+3. **Leitura.** A listagem já usa os índices compostos dos filtros e vive em um read model
+   separado. Os próximos passos, nessa ordem: paginação por cursor para páginas profundas,
+   uma réplica de leitura do Postgres só para o `TransactionQueries` (a troca de conexão é
+   local a essa classe), e omitir ou estimar o `total` quando a contagem passar a custar.
+   O fan-out do SSE sai da memória do processo para um pub/sub (Redis ou um consumer por
+   réplica) no dia em que houver mais de uma réplica do serviço de transações.
+
+**Alternativas consideradas:** escalar horizontalmente de saída, sem medir; CQRS com banco de
+leitura separado e cache de listagem desde já; sharding por conta.
+
+**Por quê:** em produção financeira o gargalo raramente está onde a intuição aponta; no
+gateway de pagamentos em que trabalho, o primeiro limite real foi o pool de conexões, não o
+banco nem a fila. Cada passo acima é reversível e cabe em uma PR, porque as fronteiras já
+estão no lugar: read model separado da escrita, publicação atrás de uma porta, consumers
+idempotentes por construção. CQRS completo e sharding resolvem problemas que este volume
+ainda não tem, e cobram consistência eventual e complexidade operacional desde o primeiro
+dia.
+
+## O recorte da vaga
+
+**Decisão:** entregar o que o desafio pede, na stack que ele fixa, e registrar o que a
+descrição da vaga cita e não entrou, com o momento em que entraria.
+
+- **TypeORM**: o desafio fixa Prisma; a persistência está atrás de uma porta de repositório e
+  de um read model, então a troca ficaria contida em `infrastructure/persistence`.
+- **Redis**: não há cache nem sessão neste recorte. Entraria primeiro como pub/sub do SSE
+  com mais de uma réplica, depois como cache das listagens mais consultadas.
+- **Keycloak e OIDC**: não há autenticação; a API aceita qualquer origem. Antes de qualquer
+  exposição, um guard na API validando o token e a sessão no dashboard.
+- **Redux Toolkit**: o estado do dashboard é remoto e vive no TanStack Query. Redux entra
+  quando houver estado de cliente compartilhado entre telas, o que ainda não existe.
+- **Playwright**: a Testing Library por papel cobre as telas e seus estados; Playwright
+  entraria para o fluxo completo com os dois serviços e o Kafka de pé.
+- **Swagger**: o contrato HTTP vive em `packages/contracts` e é o mesmo tipo dos dois lados;
+  OpenAPI quando houver um consumidor fora deste repositório.
+- **LLM e evals**: fora do problema.
+
+**Alternativas consideradas:** ampliar o escopo para cobrir a vaga; ignorar a vaga e entregar
+só o enunciado sem dizer o que faltou.
+
+**Por quê:** cada item é uma decisão de quando, não de se. Registrar isso mostra o que eu li
+na vaga sem inflar a entrega com peças que o problema ainda não pede, e deixa claro onde
+cada uma se encaixaria na arquitetura que existe.
