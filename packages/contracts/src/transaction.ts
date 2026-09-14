@@ -35,14 +35,27 @@ export interface TransactionResponse {
   createdAt: string;
 }
 
-/** Filtros e paginação de `GET /transactions`; datas em ISO-8601. */
-export interface ListTransactionsQuery {
+export type SortDirection = 'asc' | 'desc';
+
+/** Campos pelos quais `GET /transactions` aceita ordenar; sem `sort`, a lista vem do mais recente. */
+export const TRANSACTION_SORT_FIELDS = ['createdAt', 'value'] as const;
+
+export type TransactionSortField = (typeof TRANSACTION_SORT_FIELDS)[number];
+
+/** Filtros de `GET /transactions`; datas em ISO-8601. */
+export interface TransactionFilter {
   status?: TransactionStatus;
   transferTypeId?: number;
   from?: string;
   to?: string;
+}
+
+/** Filtros, paginação e ordenação de `GET /transactions`. */
+export interface ListTransactionsQuery extends TransactionFilter {
   page?: number;
   pageSize?: number;
+  sort?: TransactionSortField;
+  sortDir?: SortDirection;
 }
 
 export interface PagedResponse<TItem> {
