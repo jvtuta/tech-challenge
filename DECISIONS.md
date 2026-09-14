@@ -17,6 +17,38 @@ revisada no mesmo PR que muda produtor e consumidor. Repositórios separados exi
 o pacote de contratos para sincronizar. Turborepo traria cache e paralelismo, mas com três
 pacotes pequenos o ganho não paga a camada extra de configuração para explicar.
 
+## Arquitetura dos serviços: hexagonal enxuta
+
+**Decisão:** cada serviço NestJS é organizado por módulo de negócio (`transactions`,
+`anti-fraud`), e dentro dele em três camadas: `domain` (entidade, objetos de valor, regra
+pura e a interface do repositório), `application` (casos de uso, que orquestram domínio,
+unidade de trabalho e publicação de eventos por portas) e `infrastructure` (controllers
+HTTP, controllers Kafka, SSE, repositório Prisma). O que é transversal fica em `shared` com
+as mesmas três camadas: erro de negócio com categoria semântica, unidade de trabalho,
+configuração, Prisma e o filtro que traduz erro em HTTP. A dependência aponta sempre para
+dentro: o domínio não conhece Nest nem Prisma; a aplicação conhece só as portas; a
+infraestrutura implementa as portas e é a única que conhece o framework. Não há barramento
+de comandos, eventos de domínio internos nem agregado com classe base: a entidade é uma
+classe simples com os métodos que a regra pede.
+
+**Alternativas consideradas:** a organização padrão do NestJS (controller, service e
+repositório por módulo, com o service concentrando regra e acesso a dados); a versão completa
+do que uso em outros projetos (agregado com classe base, eventos de domínio, mediador de
+comandos e consultas, mappers entre entidade e modelo); arquitetura em camadas por tipo de
+arquivo (todos os controllers em uma pasta, todos os services em outra).
+
+**Por quê:** é a estrutura que eu uso nos serviços em que trabalhei, reduzida ao que este
+problema exige. O ganho que me interessa é testar a regra e os casos de uso sem subir o Nest
+nem o banco: o caso de uso de criação roda com um repositório em memória e um publisher em
+memória, e o caminho triste do broker é um teste unitário de milissegundos. A organização
+padrão do NestJS mistura regra e persistência no service, e o teste do sad path passa a
+exigir mock do Prisma. A versão completa, com mediador e eventos de domínio internos, é o
+que eu montaria para um contexto com vários agregados e muitas reações a um mesmo evento;
+aqui há uma entidade e duas transições, e cada peça a mais seria uma peça a explicar sem
+ninguém a usar. Organizar por tipo de arquivo espalha uma funcionalidade por pastas
+distantes e esconde a direção das dependências, que é o que a arquitetura existe para
+mostrar.
+
 ## Ferramentas de qualidade na raiz
 
 **Decisão:** ESLint (flat config), Prettier, Jest e TypeScript configurados uma vez na raiz;
@@ -38,7 +70,7 @@ no dashboard. Cada app expõe `test`; a raiz agrega.
 **Alternativas consideradas:** Vitest.
 
 **Por quê:** Jest é o padrão do NestJS e do Next.js, dispensa configuração de decorators e é
-a ferramenta que a equipe já usa. Vitest é mais rápido, mas exige SWC para
+a ferramenta que eu já uso. Vitest é mais rápido, mas exige SWC para
 `emitDecoratorMetadata` no NestJS; a velocidade não compensa mais uma peça para manter em um
 projeto deste tamanho.
 
@@ -52,7 +84,7 @@ exatamente `pnpm quality`.
 **Alternativas consideradas:** `lefthook`; rodar só o lint no CI e os testes em outro job.
 
 **Por quê:** o que falha localmente tem que falhar no CI, e vice-versa. Um único comando
-garante isso por construção. `husky` é a opção que a equipe já conhece; `lefthook` é mais
+garante isso por construção. `husky` é a opção que eu já uso; `lefthook` é mais
 rápido em repositórios grandes, o que não é o caso aqui.
 
 ## Contratos compartilhados
@@ -424,3 +456,64 @@ store seria camada sem função. Organizar por funcionalidade mantém tudo que m
 mesmo lugar; `shared` só recebe o que já é usado por mais de uma tela. Os testes consultam a
 interface pelo papel acessível, então rótulo, `status` e `alert` são parte do contrato da
 tela, não detalhe visual.
+
+## Volume alto de escritas e leituras concorrentes
+
+**Decisão:** medir antes de mudar, e mudar na ordem em que a medição apontar. Os números que
+eu acompanharia primeiro: latência do `POST` no p99, lag do grupo de consumers do antifraude
+e do de status, quantas transações o varredor republica por passada (é o termômetro da
+publicação falhando), tempo das consultas de listagem por filtro e tamanho do pool do Prisma
+em uso. Com isso em mãos, a sequência que eu seguiria, cada passo local a uma fronteira que
+já existe no código:
+
+1. **Escrita.** O `POST` faz um insert e um produce, sem esperar o veredito; o primeiro
+   limite é o pool do Prisma, dimensionado por réplica. O varredor vira um outbox com relay
+   quando a taxa de falha de publicação ou o custo de varrer a tabela justificarem uma
+   fila própria, sem tocar o caso de uso: a porta `EventPublisher` já isola quem publica.
+2. **Processamento.** `transaction.created` já sai particionado por `transactionExternalId`;
+   escalar o antifraude é aumentar partições e subir consumers até esse número, mantendo a
+   ordem por transação. Réplicas do consumer de status são seguras porque a atualização só
+   acontece a partir de `pending`.
+3. **Leitura.** A listagem já usa os índices compostos dos filtros e vive em um read model
+   separado. Os próximos passos, nessa ordem: paginação por cursor para páginas profundas,
+   uma réplica de leitura do Postgres só para o `TransactionQueries` (a troca de conexão é
+   local a essa classe), e omitir ou estimar o `total` quando a contagem passar a custar.
+   O fan-out do SSE sai da memória do processo para um pub/sub (Redis ou um consumer por
+   réplica) no dia em que houver mais de uma réplica do serviço de transações.
+
+**Alternativas consideradas:** escalar horizontalmente de saída, sem medir; CQRS com banco de
+leitura separado e cache de listagem desde já; sharding por conta.
+
+**Por quê:** em produção financeira o gargalo raramente está onde a intuição aponta; no
+gateway de pagamentos em que trabalhei, o primeiro limite real foi o pool de conexões, não o
+banco nem a fila. Cada passo acima é reversível e cabe em uma PR, porque as fronteiras já
+estão no lugar: read model separado da escrita, publicação atrás de uma porta, consumers
+idempotentes por construção. CQRS completo e sharding resolvem problemas que este volume
+ainda não tem, e cobram consistência eventual e complexidade operacional desde o primeiro
+dia.
+
+## O recorte da vaga
+
+**Decisão:** entregar o que o desafio pede, na stack que ele fixa, e registrar o que a
+descrição da vaga cita e não entrou, com o momento em que entraria.
+
+- **TypeORM**: o desafio fixa Prisma; a persistência está atrás de uma porta de repositório e
+  de um read model, então a troca ficaria contida em `infrastructure/persistence`.
+- **Redis**: não há cache nem sessão neste recorte. Entraria primeiro como pub/sub do SSE
+  com mais de uma réplica, depois como cache das listagens mais consultadas.
+- **Keycloak e OIDC**: não há autenticação; a API aceita qualquer origem. Antes de qualquer
+  exposição, um guard na API validando o token e a sessão no dashboard.
+- **Redux Toolkit**: o estado do dashboard é remoto e vive no TanStack Query. Redux entra
+  quando houver estado de cliente compartilhado entre telas, o que ainda não existe.
+- **Playwright**: a Testing Library por papel cobre as telas e seus estados; Playwright
+  entraria para o fluxo completo com os dois serviços e o Kafka de pé.
+- **Swagger**: o contrato HTTP vive em `packages/contracts` e é o mesmo tipo dos dois lados;
+  OpenAPI quando houver um consumidor fora deste repositório.
+- **LLM e evals**: fora do problema.
+
+**Alternativas consideradas:** ampliar o escopo para cobrir a vaga; ignorar a vaga e entregar
+só o enunciado sem dizer o que faltou.
+
+**Por quê:** cada item é uma decisão de quando, não de se. Registrar isso mostra o que eu li
+na vaga sem inflar a entrega com peças que o problema ainda não pede, e deixa claro onde
+cada uma se encaixaria na arquitetura que existe.
