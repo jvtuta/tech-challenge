@@ -2,7 +2,7 @@ import { DomainError } from '../../shared/domain/domain-error';
 
 export class EventPublishFailedError extends DomainError {
   readonly code = 'EVENT_PUBLISH_FAILED';
-  readonly httpStatus = 503;
+  readonly kind = 'unavailable';
 
   constructor(
     readonly topic: string,
@@ -14,7 +14,7 @@ export class EventPublishFailedError extends DomainError {
 
 export class UnknownTransferTypeError extends DomainError {
   readonly code = 'UNKNOWN_TRANSFER_TYPE';
-  readonly httpStatus = 422;
+  readonly kind = 'invalid';
 
   constructor(transferTypeId: number) {
     super(`Transfer type ${transferTypeId} does not exist`);
@@ -23,7 +23,7 @@ export class UnknownTransferTypeError extends DomainError {
 
 export class TransactionNotFoundError extends DomainError {
   readonly code = 'TRANSACTION_NOT_FOUND';
-  readonly httpStatus = 404;
+  readonly kind = 'not-found';
 
   constructor(transactionExternalId: string) {
     super(`Transaction ${transactionExternalId} was not found`);

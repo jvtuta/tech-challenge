@@ -2,7 +2,7 @@ import { DomainError } from '../../shared/domain/domain-error';
 
 export class InvalidTransactionValueError extends DomainError {
   readonly code = 'INVALID_TRANSACTION_VALUE';
-  readonly httpStatus = 422;
+  readonly kind = 'invalid';
 
   constructor(value: number) {
     super(`Transaction value must be a positive amount with at most two decimals, got ${value}`);
