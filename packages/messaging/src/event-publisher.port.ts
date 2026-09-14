@@ -4,10 +4,10 @@ import type { EventEnvelope, TopicName } from '@tech-challenge/contracts';
  * Mensagem pronta para o broker. A chave define a partição: todos os eventos de uma mesma
  * transação usam o mesmo `key` e por isso são entregues em ordem ao consumidor.
  */
-export interface OutboundEvent<TType extends TopicName = TopicName, TData = unknown> {
-  topic: TType;
+export interface OutboundEvent<TTopic extends TopicName = TopicName> {
+  topic: TTopic;
   key: string;
-  envelope: EventEnvelope<TType, TData>;
+  envelope: EventEnvelope<TTopic>;
 }
 
 export interface EventPublisher {

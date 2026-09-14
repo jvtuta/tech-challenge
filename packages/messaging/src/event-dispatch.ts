@@ -1,29 +1,20 @@
 import {
   createEnvelope,
-  type TOPICS,
   type EnvelopeOptions,
   type EventEnvelope,
+  type PayloadOf,
   type TopicName,
-  type TransactionCreatedData,
-  type TransactionStatusUpdatedData,
 } from '@tech-challenge/contracts';
 import type { EventPublisher } from './event-publisher.port';
 
-/** Payload aceito por cada tópico; `with()` só compila com o dado certo para o evento. */
-export type PayloadOf<TType extends TopicName> = TType extends typeof TOPICS.TRANSACTION_CREATED
-  ? TransactionCreatedData
-  : TType extends typeof TOPICS.TRANSACTION_STATUS_UPDATED
-    ? TransactionStatusUpdatedData
-    : never;
-
-export class EventDispatch<TType extends TopicName> {
+export class EventDispatch<TTopic extends TopicName> {
   private options: EnvelopeOptions = {};
 
   constructor(
     private readonly publisher: EventPublisher,
-    private readonly topic: TType,
+    private readonly topic: TTopic,
     private readonly key: string,
-    private readonly data: PayloadOf<TType>,
+    private readonly data: PayloadOf<TTopic>,
   ) {
     if (key.trim() === '') {
       throw new Error(`Event ${topic} requires a non-empty key`);
@@ -40,32 +31,32 @@ export class EventDispatch<TType extends TopicName> {
     return this;
   }
 
-  async publish(): Promise<EventEnvelope<TType, PayloadOf<TType>>> {
+  async publish(): Promise<EventEnvelope<TTopic>> {
     const envelope = createEnvelope(this.topic, this.data, this.options);
     await this.publisher.publish({ topic: this.topic, key: this.key, envelope });
     return envelope;
   }
 }
 
-class KeyedEvent<TType extends TopicName> {
+class KeyedEvent<TTopic extends TopicName> {
   constructor(
     private readonly publisher: EventPublisher,
-    private readonly topic: TType,
+    private readonly topic: TTopic,
     private readonly key: string,
   ) {}
 
-  with(data: PayloadOf<TType>): EventDispatch<TType> {
+  with(data: PayloadOf<TTopic>): EventDispatch<TTopic> {
     return new EventDispatch(this.publisher, this.topic, this.key, data);
   }
 }
 
-class EventDraft<TType extends TopicName> {
+class EventDraft<TTopic extends TopicName> {
   constructor(
     private readonly publisher: EventPublisher,
-    private readonly topic: TType,
+    private readonly topic: TTopic,
   ) {}
 
-  keyedBy(key: string): KeyedEvent<TType> {
+  keyedBy(key: string): KeyedEvent<TTopic> {
     return new KeyedEvent(this.publisher, this.topic, key);
   }
 }
@@ -81,7 +72,7 @@ class EventDraft<TType extends TopicName> {
  */
 export function dispatch(publisher: EventPublisher) {
   return {
-    event<TType extends TopicName>(topic: TType): EventDraft<TType> {
+    event<TTopic extends TopicName>(topic: TTopic): EventDraft<TTopic> {
       return new EventDraft(publisher, topic);
     },
   };
