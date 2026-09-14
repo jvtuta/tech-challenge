@@ -5,6 +5,7 @@ export type { PersistenceContext };
 
 export interface TransactionRepository {
   save(transaction: Transaction, context: PersistenceContext): Promise<void>;
+  update(transaction: Transaction, context: PersistenceContext): Promise<void>;
   findByExternalId(transactionExternalId: string): Promise<Transaction | null>;
 }
 

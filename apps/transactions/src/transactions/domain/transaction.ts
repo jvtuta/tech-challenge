@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { TRANSACTION_STATUS, type TransactionStatus } from '@tech-challenge/contracts';
+import { TransactionAlreadySettledError } from './transaction-settled.error';
 import { TransactionValue } from './transaction-value.vo';
 
 export interface NewTransaction {
@@ -8,6 +9,8 @@ export interface NewTransaction {
   transferTypeId: number;
   value: number;
 }
+
+export type FinalStatus = Exclude<TransactionStatus, 'pending'>;
 
 export interface TransactionProps {
   transactionExternalId: string;
@@ -37,6 +40,26 @@ export class Transaction {
 
   static restore(props: TransactionProps): Transaction {
     return new Transaction(props);
+  }
+
+  /**
+   * Aplica o veredito do antifraude. Só `pending` muda; o mesmo veredito repetido (entrega
+   * duplicada do broker) não faz nada; um veredito diferente sobre uma transação já decidida
+   * é conflito, porque o primeiro veredito é o que valeu.
+   */
+  settle(status: FinalStatus): boolean {
+    if (this.props.status === status) {
+      return false;
+    }
+    if (this.props.status !== TRANSACTION_STATUS.PENDING) {
+      throw new TransactionAlreadySettledError(
+        this.props.transactionExternalId,
+        this.props.status,
+        status,
+      );
+    }
+    this.props.status = status;
+    return true;
   }
 
   get transactionExternalId(): string {

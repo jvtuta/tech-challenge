@@ -41,6 +41,13 @@ export class PrismaTransactionRepository implements TransactionRepository {
     }
   }
 
+  async update(transaction: Transaction, context: PersistenceContext): Promise<void> {
+    await prismaClientOf(context).transaction.update({
+      where: { transactionExternalId: transaction.transactionExternalId },
+      data: { status: transaction.status },
+    });
+  }
+
   async findByExternalId(transactionExternalId: string): Promise<Transaction | null> {
     const row = await this.prisma.transaction.findUnique({ where: { transactionExternalId } });
     return row ? toDomain(row) : null;
