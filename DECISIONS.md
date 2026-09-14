@@ -371,3 +371,27 @@ volta que esta tela não usa: o cliente só ouve. O limite conhecido é o fan-ou
 com duas instâncias do serviço, o veredito aplicado em uma não chega ao stream aberto na
 outra; a evolução é um pub/sub compartilhado (Redis) entre as instâncias, e a tela continua
 correta mesmo sem ele porque a consulta direta sempre reflete o banco.
+
+## Dashboard organizado por funcionalidade, com estado remoto no TanStack Query
+
+**Decisão:** o dashboard Next.js separa `features/transactions` (chamadas à API, hooks e
+componentes da funcionalidade) de `shared` (componentes de interface genéricos e utilitários
+de formatação e acesso à API). O estado remoto fica no TanStack Query; as três telas tratam
+carregando, erro (com "tentar de novo") e vazio como componentes explícitos, alcançáveis por
+papel (`status`, `alert`). O formulário valida com `zod` e `react-hook-form` as mesmas regras
+do serviço antes de sair do navegador. O detalhe assina o stream SSE só enquanto a transação
+está pendente e o solta quando o veredito chega. O serviço de transações passa a aceitar
+requisições de qualquer origem, porque não há autenticação neste recorte.
+
+**Alternativas consideradas:** Server Components com busca no servidor e revalidação;
+Redux Toolkit para o estado; organizar por tipo de arquivo (`components/`, `hooks/`, `api/`)
+em vez de por funcionalidade.
+
+**Por quê:** as três telas dependem de dados que mudam depois de renderizadas, então o
+estado precisa viver no cliente com cache, invalidação e os três estados; o TanStack Query
+entrega isso sem uma store global. Redux Toolkit é o que a vaga cita, e faz sentido quando há
+estado de aplicação compartilhado entre telas; aqui todo estado é remoto e por tela, e uma
+store seria camada sem função. Organizar por funcionalidade mantém tudo que muda junto no
+mesmo lugar; `shared` só recebe o que já é usado por mais de uma tela. Os testes consultam a
+interface pelo papel acessível, então rótulo, `status` e `alert` são parte do contrato da
+tela, não detalhe visual.
