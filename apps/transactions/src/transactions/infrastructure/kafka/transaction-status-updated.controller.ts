@@ -4,6 +4,7 @@ import { TOPICS, type TransactionStatusUpdatedEvent } from '@tech-challenge/cont
 import { DiscardEventFilter } from '../../../shared/infrastructure/messaging/discard-event.filter';
 import { EnvelopePipe } from '../../../shared/infrastructure/messaging/envelope.pipe';
 import { UpdateTransactionStatus } from '../../application/update-transaction-status.use-case';
+import { TransactionStatusStream } from '../sse/transaction-status-stream';
 
 /** Borda Kafka do serviço de transações; o que fazer com cada erro é decisão do filter. */
 @Controller()
@@ -11,7 +12,10 @@ import { UpdateTransactionStatus } from '../../application/update-transaction-st
 export class TransactionStatusUpdatedController {
   private readonly logger = new Logger(TransactionStatusUpdatedController.name);
 
-  constructor(private readonly updateStatus: UpdateTransactionStatus) {}
+  constructor(
+    private readonly updateStatus: UpdateTransactionStatus,
+    private readonly stream: TransactionStatusStream,
+  ) {}
 
   @EventPattern(TOPICS.TRANSACTION_STATUS_UPDATED)
   async onStatusUpdated(
@@ -19,10 +23,12 @@ export class TransactionStatusUpdatedController {
     event: TransactionStatusUpdatedEvent,
   ): Promise<void> {
     const changed = await this.updateStatus.execute(event.data);
-    if (!changed) {
-      this.logger.log(
-        `Verdict already applied to ${event.data.transactionExternalId}; ignoring duplicate`,
-      );
+    if (changed) {
+      this.stream.publish(event.data);
+      return;
     }
+    this.logger.log(
+      `Verdict already applied to ${event.data.transactionExternalId}; ignoring duplicate`,
+    );
   }
 }
