@@ -10,6 +10,7 @@ import {
   Query,
 } from '@nestjs/common';
 import type { TransactionListResponse, TransactionResponse } from '@tech-challenge/contracts';
+import { SearchParams } from '../../../shared/domain/searchable-repository';
 import { CreateTransaction } from '../../application/create-transaction.use-case';
 import { TransactionNotFoundError } from '../../application/errors';
 import { TransactionQueries } from '../persistence/transaction.queries';
@@ -39,8 +40,17 @@ export class TransactionsController {
   }
 
   @Get()
-  list(@Query() query: ListTransactionsDto): Promise<TransactionListResponse> {
-    return this.queries.list(query);
+  async list(@Query() query: ListTransactionsDto): Promise<TransactionListResponse> {
+    const { page, pageSize, sort, sortDir, ...filter } = query;
+    const result = await this.queries.search(
+      new SearchParams({ page, perPage: pageSize, sort, sortDir, filter }),
+    );
+    return {
+      items: result.items,
+      page: result.currentPage,
+      pageSize: result.perPage,
+      total: result.total,
+    };
   }
 
   @Get(':transactionExternalId')
