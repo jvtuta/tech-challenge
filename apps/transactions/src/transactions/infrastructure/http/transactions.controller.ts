@@ -7,12 +7,14 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
 } from '@nestjs/common';
-import type { TransactionResponse } from '@tech-challenge/contracts';
+import type { TransactionListResponse, TransactionResponse } from '@tech-challenge/contracts';
 import { CreateTransaction } from '../../application/create-transaction.use-case';
 import { TransactionNotFoundError } from '../../application/errors';
 import { TransactionQueries } from '../persistence/transaction.queries';
 import { CreateTransactionDto } from './create-transaction.dto';
+import { ListTransactionsDto } from './list-transactions.dto';
 
 @Controller('transactions')
 export class TransactionsController {
@@ -34,6 +36,11 @@ export class TransactionsController {
       throw new TransactionNotFoundError(transactionExternalId);
     }
     return created;
+  }
+
+  @Get()
+  list(@Query() query: ListTransactionsDto): Promise<TransactionListResponse> {
+    return this.queries.list(query);
   }
 
   @Get(':transactionExternalId')

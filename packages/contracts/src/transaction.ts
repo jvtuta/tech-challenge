@@ -34,3 +34,22 @@ export interface TransactionResponse {
   value: number;
   createdAt: string;
 }
+
+/** Filtros e paginação de `GET /transactions`; datas em ISO-8601. */
+export interface ListTransactionsQuery {
+  status?: TransactionStatus;
+  transferTypeId?: number;
+  from?: string;
+  to?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface PagedResponse<TItem> {
+  items: TItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export type TransactionListResponse = PagedResponse<TransactionResponse>;

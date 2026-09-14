@@ -97,6 +97,76 @@ describe('transactions (e2e)', () => {
     });
   });
 
+  describe('GET /transactions', () => {
+    async function create(transferTypeId: number, value: number): Promise<string> {
+      const { body } = await request(app.getHttpServer())
+        .post('/transactions')
+        .send({ ...validBody, transferTypeId, value })
+        .expect(201);
+      return body.transactionExternalId;
+    }
+
+    it('lists the most recent first, paginated, with the total of the filter', async () => {
+      const first = await create(1, 10);
+      const second = await create(1, 20);
+      const third = await create(2, 30);
+
+      const { body } = await request(app.getHttpServer())
+        .get('/transactions?pageSize=2')
+        .expect(200);
+
+      expect(body).toMatchObject({ page: 1, pageSize: 2, total: 3 });
+      expect(
+        body.items.map((item: { transactionExternalId: string }) => item.transactionExternalId),
+      ).toEqual([third, second]);
+
+      const { body: lastPage } = await request(app.getHttpServer())
+        .get('/transactions?pageSize=2&page=2')
+        .expect(200);
+      expect(
+        lastPage.items.map((item: { transactionExternalId: string }) => item.transactionExternalId),
+      ).toEqual([first]);
+    });
+
+    it('filters by status, type and period', async () => {
+      await create(1, 10);
+      const payment = await create(2, 30);
+
+      const { body: byType } = await request(app.getHttpServer())
+        .get('/transactions?transferTypeId=2')
+        .expect(200);
+      expect(byType.total).toBe(1);
+      expect(byType.items[0].transactionExternalId).toBe(payment);
+
+      const { body: pending } = await request(app.getHttpServer())
+        .get('/transactions?status=pending')
+        .expect(200);
+      expect(pending.total).toBe(2);
+
+      const { body: approved } = await request(app.getHttpServer())
+        .get('/transactions?status=approved')
+        .expect(200);
+      expect(approved).toMatchObject({ total: 0, items: [] });
+
+      const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+      const { body: before } = await request(app.getHttpServer())
+        .get(`/transactions?to=${yesterday}`)
+        .expect(200);
+      expect(before.total).toBe(0);
+
+      const { body: since } = await request(app.getHttpServer())
+        .get(`/transactions?from=${yesterday}`)
+        .expect(200);
+      expect(since.total).toBe(2);
+    });
+
+    it('rejects filters outside the contract with 400', async () => {
+      await request(app.getHttpServer()).get('/transactions?status=unknown').expect(400);
+      await request(app.getHttpServer()).get('/transactions?pageSize=500').expect(400);
+      await request(app.getHttpServer()).get('/transactions?from=yesterday').expect(400);
+    });
+  });
+
   describe('GET /transactions/:transactionExternalId', () => {
     it('returns a created transaction in the response contract', async () => {
       const created = await request(app.getHttpServer()).post('/transactions').send(validBody);
