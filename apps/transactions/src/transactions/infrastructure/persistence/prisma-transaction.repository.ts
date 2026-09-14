@@ -9,7 +9,7 @@ import type {
   TransactionRepository,
 } from '../../domain/transaction.repository';
 import { TransactionValue } from '../../domain/transaction-value';
-import { prismaClientOf } from './prisma-unit-of-work';
+import { prismaClientOf } from '../../../shared/infrastructure/prisma/prisma-unit-of-work';
 
 const FOREIGN_KEY_VIOLATION = 'P2003';
 

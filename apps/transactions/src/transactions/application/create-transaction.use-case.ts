@@ -7,7 +7,7 @@ import {
   type TransactionRepository,
 } from '../domain/transaction.repository';
 import { EventPublishFailedError } from './errors';
-import { UNIT_OF_WORK, type UnitOfWork } from './unit-of-work';
+import { UNIT_OF_WORK, type UnitOfWork } from '../../shared/application/unit-of-work';
 
 @Injectable()
 export class CreateTransaction {

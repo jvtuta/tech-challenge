@@ -1,4 +1,5 @@
 import { InMemoryEventPublisher } from '@tech-challenge/messaging';
+import { InMemoryUnitOfWork } from '../../shared/testing/in-memory-unit-of-work';
 import { InMemoryTransactionRepository } from '../testing/in-memory-transaction.repository';
 import { CreateTransaction } from './create-transaction.use-case';
 import { EventPublishFailedError } from './errors';
@@ -14,7 +15,11 @@ describe('CreateTransaction', () => {
   it('persists the transaction as pending and publishes transaction.created keyed by its id', async () => {
     const repository = new InMemoryTransactionRepository();
     const publisher = new InMemoryEventPublisher();
-    const useCase = new CreateTransaction(repository, repository, publisher);
+    const useCase = new CreateTransaction(
+      repository,
+      new InMemoryUnitOfWork([repository]),
+      publisher,
+    );
 
     const transaction = await useCase.execute(input);
 
@@ -36,7 +41,11 @@ describe('CreateTransaction', () => {
   it('does not keep the transaction when the event cannot be published', async () => {
     const repository = new InMemoryTransactionRepository();
     const publisher = new InMemoryEventPublisher().failWith(new Error('broker unavailable'));
-    const useCase = new CreateTransaction(repository, repository, publisher);
+    const useCase = new CreateTransaction(
+      repository,
+      new InMemoryUnitOfWork([repository]),
+      publisher,
+    );
 
     await expect(useCase.execute(input)).rejects.toBeInstanceOf(EventPublishFailedError);
     expect(repository.size).toBe(0);
@@ -45,7 +54,11 @@ describe('CreateTransaction', () => {
   it('rejects an invalid value before touching persistence or the broker', async () => {
     const repository = new InMemoryTransactionRepository();
     const publisher = new InMemoryEventPublisher();
-    const useCase = new CreateTransaction(repository, repository, publisher);
+    const useCase = new CreateTransaction(
+      repository,
+      new InMemoryUnitOfWork([repository]),
+      publisher,
+    );
 
     await expect(useCase.execute({ ...input, value: -5 })).rejects.toThrow(
       'Transaction value must be a positive amount',
