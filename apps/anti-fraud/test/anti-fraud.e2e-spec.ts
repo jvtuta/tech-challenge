@@ -22,7 +22,12 @@ describe('anti-fraud (e2e, Kafka real)', () => {
   const received = new Map<string, TransactionStatusUpdatedEvent>();
 
   beforeAll(async () => {
-    const kafka = new Kafka({ brokers, clientId: 'anti-fraud-e2e-probe' });
+    // Em broker recém-criado (CI) o coordenador de grupos demora a existir; a sonda espera mais.
+    const kafka = new Kafka({
+      brokers,
+      clientId: 'anti-fraud-e2e-probe',
+      retry: { initialRetryTime: 300, retries: 12 },
+    });
     const admin = kafka.admin();
     await admin.connect();
     await admin.createTopics({
