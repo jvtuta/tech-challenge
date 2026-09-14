@@ -15,7 +15,14 @@ export class KafkaEventPublisher implements EventPublisher {
   private connecting: Promise<void> | undefined;
 
   constructor(options: KafkaEventPublisherOptions) {
-    const kafka = new Kafka({ brokers: options.brokers, clientId: options.clientId });
+    // Falha rápido: quem publica já gravou o que tinha que gravar, e a recuperação é do varredor.
+    // Com o padrão do KafkaJS, um broker fora segurava cada publicação por cerca de 12 s.
+    const kafka = new Kafka({
+      brokers: options.brokers,
+      clientId: options.clientId,
+      connectionTimeout: 1_000,
+      retry: { initialRetryTime: 100, retries: 2 },
+    });
     this.producer = kafka.producer({ allowAutoTopicCreation: true });
   }
 
