@@ -267,26 +267,41 @@ ao CI; em produção os tópicos seriam provisionados com partições e retenç�
 schema registry faria a validação em runtime com evolução formal, mas é infraestrutura a
 mais para dois eventos cuja forma já é fixada em código pelo pacote de contratos.
 
-## Falha no consumo: descartar o que está fora do contrato, reprocessar o resto
+## Falha no consumo: descartar, reprocessar com teto e desistir para o varredor
 
-**Decisão:** o handler tem uma política só. Mensagem fora do contrato (JSON quebrado, tópico
-desconhecido, versão diferente, payload sem os campos) é descartada e registrada em log, e o
-handler retorna normalmente, então o offset avança. Erro lançado pelo handler (broker fora
-ao publicar o veredito, por exemplo) sobe para o transporte, que o trata como retriable: o
-offset não é commitado e a mensagem é reentregue. Não há fila de mensagens mortas nesta
-entrega.
+**Decisão:** o handler tem uma política só, com três saídas. Mensagem fora do contrato (JSON
+quebrado, tópico desconhecido, versão diferente, payload sem os campos) e erro de negócio
+determinístico são descartados com log de aviso, e o handler retorna normalmente, então o
+offset avança. Erro que pode ser transitório (banco fora, broker fora ao publicar o veredito)
+sobe para o transporte, que não commita o offset e reentrega a mensagem. A partir da terceira
+entrega do mesmo offset, o filtro desiste: registra log de erro e deixa o offset avançar. A
+contagem é por partição, dentro do processo, e vive no `RedeliveryBudget` do pacote de
+mensageria; o offset em curso é um só por partição, então o mapa não cresce. Não há fila de
+mensagens mortas nesta entrega.
 
-**Alternativas consideradas:** reprocessar tudo, inclusive mensagens malformadas; publicar
-o que falhou em um tópico de mensagens mortas (DLQ) depois de N tentativas; capturar os
-erros do handler e seguir.
+**Alternativas consideradas:** reprocessar tudo para sempre, inclusive mensagens
+malformadas, que era o comportamento anterior; publicar o que falhou em um tópico de
+mensagens mortas (DLQ) depois de N tentativas; capturar os erros do handler e seguir;
+contar as tentativas em um cabeçalho da mensagem, republicando no mesmo tópico.
 
 **Por quê:** reprocessar JSON quebrado não conserta o JSON e trava a partição para sempre;
-descartar com log é o único destino para ele. Já um erro do handler costuma ser
-transitório, e reprocessar é o comportamento certo; engolir perderia vereditos. A DLQ é a
-evolução natural para o caso em que um erro do handler não é transitório: ela separa a
-mensagem envenenada sem travar a partição e permite reprocessar depois. Ficou de fora porque
-exige um segundo tópico, um contador de tentativas e um processo de reprocessamento, e o
-enunciado pede que o caminho triste exista e seja explicado, não que seja completo.
+descartar com log é o único destino para ele. Já um erro de infraestrutura costuma ser
+transitório, e reentregar é o comportamento certo, mas sem teto ele tem o mesmo fim do JSON
+quebrado: uma dependência fora do ar por minutos prende a partição inteira, e os eventos das
+outras transações ficam atrás dela na fila. Três entregas cobrem a oscilação curta,
+reconexão do banco ou rebalanceamento do grupo; o que não passa em três não é oscilação.
+Desistir é seguro aqui por causa do varredor: a transação continua pendente, e a cada 5
+segundos o serviço de transações republica o `transaction.created` das pendentes com mais de
+10 segundos, o que refaz o veredito e traz o evento de volta por um caminho que não depende
+daquele offset. O custo de desistir cedo é, no pior caso, a soma da carência com o intervalo
+do varredor: com o banco fora e o veredito em voo, o filtro desistiu da mensagem em 3
+segundos em vez de prender a partição, e a transação foi aprovada na primeira passada do
+varredor depois que o banco voltou. O contador em memória é suficiente porque a reentrega também é do processo: se
+ele reiniciar, o grupo reprocessa a partir do último offset commitado e o orçamento recomeça,
+que é o que se quer. A DLQ continua sendo a evolução natural, para quando houver o que fazer
+com a mensagem descartada além do log, e o cabeçalho de tentativas seria o caminho se a
+contagem precisasse sobreviver ao processo, ao custo de republicar a mensagem e perder a
+ordem dentro da partição.
 
 ## Health do antifraude como readiness da dependência real
 
