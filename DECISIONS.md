@@ -137,8 +137,11 @@ segundos, sem tabela nova, reusando o índice `(status, created_at)` da modelage
 republicado a mais é inócuo porque a regra do antifraude é determinística e o consumer de
 status só muda o que está pendente. O outbox faz o mesmo com uma fila própria e recuperação em
 milissegundos, ao custo de tabela, relay e retenção; é o próximo passo quando o volume
-justificar. Os 10 s do corte são uma ordem de grandeza acima do pior caso medido de veredito e
-do retry do producer; os 5 s do intervalo mantêm a recuperação curta sem pesar na tabela.
+justificar. O producer passa a tentar pouco (duas tentativas curtas, conexão com limite de 1 s): quem
+publica já gravou o que tinha que gravar, e a recuperação é do varredor; medido, o `POST` com
+o broker fora caiu de 12,5 s para cerca de 300 ms. Os 10 s do corte são uma ordem de
+grandeza acima do pior caso medido de veredito e das tentativas do producer; os 5 s do
+intervalo mantêm a recuperação curta sem pesar na tabela.
 
 ## Leituras fora dos casos de uso
 
