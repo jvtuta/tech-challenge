@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { TRANSACTION_STATUS, type TransactionStatus } from '@tech-challenge/contracts';
-import { TransactionValue } from './transaction-value';
+import { TransactionValue } from './transaction-value.vo';
 
 export interface NewTransaction {
   accountExternalIdDebit: string;

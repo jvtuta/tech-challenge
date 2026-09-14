@@ -1,5 +1,5 @@
 import { Transaction } from './transaction';
-import { InvalidTransactionValueError, TransactionValue } from './transaction-value';
+import { InvalidTransactionValueError, TransactionValue } from './transaction-value.vo';
 
 describe('TransactionValue', () => {
   it.each([0.01, 1, 999.99, 1000, 1000.01, 250000])('accepts %p', (value) => {
