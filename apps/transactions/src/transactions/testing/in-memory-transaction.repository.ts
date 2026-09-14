@@ -17,6 +17,13 @@ export class InMemoryTransactionRepository implements TransactionRepository, Sna
     return this.rows.get(transactionExternalId) ?? null;
   }
 
+  async findPendingOlderThan(cutoff: Date, limit: number): Promise<Transaction[]> {
+    return [...this.rows.values()]
+      .filter((transaction) => transaction.status === 'pending' && transaction.createdAt < cutoff)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .slice(0, limit);
+  }
+
   snapshot(): () => void {
     const copy = new Map(this.rows);
     return () => {

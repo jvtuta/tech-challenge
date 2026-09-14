@@ -113,25 +113,35 @@ para explicar ao lado da do Kafka. Uma função simples bastaria funcionalmente;
 foi escolhida porque lê como a regra de negócio nos casos de uso e nos testes, e porque o
 publisher em memória permite testar o caminho triste (broker fora) sem infraestrutura.
 
-## Criação de transação: gravar e publicar na mesma unidade de trabalho
+## Criação de transação: commit antes de publicar, com varredor de pendentes
 
-**Decisão:** `POST /transactions` grava a transação como `pending` e publica
-`transaction.created` dentro da mesma transação do banco. Se a publicação falhar, a gravação é
-desfeita e o cliente recebe `503` com o código `EVENT_PUBLISH_FAILED`. O caso de uso depende
-de três portas (`TransactionRepository`, `UnitOfWork`, `EventPublisher`) e é testado com
-adapters em memória, inclusive o caminho em que o broker está fora.
+**Decisão:** `POST /transactions` grava a transação como `pending` em uma transação curta do
+banco e, só depois do commit, publica `transaction.created`. Se a publicação falhar, o cliente
+recebe `201` mesmo assim, com aviso no log; um varredor periódico (a cada 5 s) republica o
+evento das transações que continuam pendentes há mais de 10 s. O caso de uso depende de três
+portas (`TransactionRepository`, `UnitOfWork`, `EventPublisher`) e é testado com adapters em
+memória, inclusive com o broker recusando.
 
-**Alternativas consideradas:** gravar e depois publicar sem transação, aceitando que uma falha
-deixe a transação pendente para sempre; outbox transacional, com uma tabela de eventos
-pendentes e um relay publicando em segundo plano; publicar primeiro e gravar depois.
+**Alternativas consideradas:** publicar dentro da transação do banco, desfazendo a gravação se
+o broker recusar (foi a primeira versão desta entrega); outbox transacional, com o evento
+gravado na mesma transação e um relay publicando depois; CDC sobre o log do banco.
 
-**Por quê:** uma transação `pending` que o antifraude nunca vai avaliar é o pior estado
-possível para o cliente, porque parece válida e nunca muda. Recusar a criação é honesto e
-imediato. O outbox é a solução mais robusta (sobrevive a quedas entre gravar e publicar sem
-segurar a transação do banco) e é o próximo passo natural se a taxa de falha do broker
-justificar; hoje custaria uma tabela, um relay e a limpeza dele para um cenário que a
-transação do banco já cobre. Publicar antes de gravar geraria eventos para transações que
-podem não existir.
+**Por quê:** a primeira versão garantia "nunca pendente sem evento", mas com dois custos que
+medi: a transação ficava aberta enquanto o KafkaJS tentava publicar (12 s com o broker fora),
+então poucas requisições com broker lento prendiam o pool inteiro; e o evento saía antes do
+commit, abrindo uma janela em que o veredito do antifraude (10 a 40 ms depois do `POST`)
+podia chegar antes de a linha ficar visível. Commitar antes de publicar fecha as duas coisas
+por construção: o broker nunca segura uma conexão e a linha sempre existe quando o evento sai.
+O que sobra é "pendente sem evento" quando a publicação falha, e o varredor cobre isso em
+segundos, sem tabela nova, reusando o índice `(status, created_at)` da modelagem. Um evento
+republicado a mais é inócuo porque a regra do antifraude é determinística e o consumer de
+status só muda o que está pendente. O outbox faz o mesmo com uma fila própria e recuperação em
+milissegundos, ao custo de tabela, relay e retenção; é o próximo passo quando o volume
+justificar. O producer passa a tentar pouco (duas tentativas curtas, conexão com limite de 1 s): quem
+publica já gravou o que tinha que gravar, e a recuperação é do varredor; medido, o `POST` com
+o broker fora caiu de 12,5 s para cerca de 300 ms. Os 10 s do corte são uma ordem de
+grandeza acima do pior caso medido de veredito e das tentativas do producer; os 5 s do
+intervalo mantêm a recuperação curta sem pesar na tabela.
 
 ## Leituras fora dos casos de uso
 
@@ -301,8 +311,7 @@ sobre uma transação já decidida é recusado (`TransactionAlreadySettledError`
 primeiro veredito é o que valeu. No consumer Kafka do serviço de transações, o envelope é validado por
 um pipe no `@Payload` e a categoria do erro decide o destino da mensagem em um único filter
 (`DiscardEventFilter`), que vale para todos os handlers Kafka do serviço: erro de negócio determinístico (`invalid`, como o conflito;
-`not-found`, depois de uma espera curta de três tentativas, porque o veredito pode chegar
-antes de a gravação da transação ficar visível) é descartado com log; qualquer outro erro sobe
+`not-found`, um id que nunca existiu) é descartado com log; qualquer outro erro sobe
 para o transporte reentregar.
 
 **Alternativas consideradas:** sobrescrever o status a cada evento recebido; guardar os
@@ -320,28 +329,8 @@ determinístico daria o mesmo resultado a cada tentativa e travaria a partição
 mensagem; foi o que aconteceu no primeiro teste de ponta a ponta desta entrega, com vereditos
 antigos para transações inexistentes, e é o motivo de a categoria do erro decidir o destino.
 
-### A janela de visibilidade e o que a espera de três tentativas resolve
-
-A criação publica `transaction.created` dentro da transação do banco (para que "Kafka recusou"
-desfaça a gravação). O custo é uma janela de milissegundos em que o evento já saiu e a linha
-ainda não foi commitada. Medido localmente, o veredito fica visível entre 10 e 40 ms depois
-do `POST`, na mesma ordem de grandeza do commit; então a corrida entre o consumer de status e
-o commit da criação é real. Sem tratamento, o veredito chega, o `SELECT` não acha a linha, o
-erro é descartado e a transação fica pendente para sempre com o veredito perdido.
-
-A espera de três tentativas com 250 ms cobre essa janela sem transformar um id inexistente em
-mensagem envenenada. É uma mitigação, não a solução definitiva, e tem dois limites: um
-`sleep` dentro do consumer segura o worker da partição enquanto espera, e os números são
-fixos; um commit lento (lock, autovacuum, I/O) acima de 750 ms ainda perde o veredito, só que
-raramente.
-
-Dois caminhos resolvem o problema de fundo, e a escolha entre eles é o que mudaria com outros
-requisitos: o outbox transacional (evento gravado na mesma transação da linha; um relay publica
-depois do commit), que elimina a corrida e o "pendente sem evento" por construção, ao custo de
-uma tabela, um relay e a limpeza dele; ou inverter a ordem, commit antes de publicar, e manter
-um varredor que republica o `created` de transações pendentes há mais de N segundos, que aceita
-a falha mas a torna recuperável com menos infraestrutura. Com o volume do enunciado, o varredor
-bastaria; com volume alto e vários produtores, o outbox é o caminho.
+Com o commit antes da publicação, o veredito não pode chegar antes de a linha existir;
+`not-found` no consumer de status passa a significar um id que nunca existiu, e é descartado.
 
 ## Listagem paginada por página, com limite de tamanho
 

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { TransactionStatus } from '@tech-challenge/contracts';
+import { TRANSACTION_STATUS, type TransactionStatus } from '@tech-challenge/contracts';
 import { Prisma, type Transaction as TransactionRow } from '@prisma/client';
 import { PrismaService } from '../../../shared/infrastructure/prisma/prisma.service';
 import { UnknownTransferTypeError } from '../../application/errors';
@@ -51,6 +51,15 @@ export class PrismaTransactionRepository implements TransactionRepository {
   async findByExternalId(transactionExternalId: string): Promise<Transaction | null> {
     const row = await this.prisma.transaction.findUnique({ where: { transactionExternalId } });
     return row ? toDomain(row) : null;
+  }
+
+  async findPendingOlderThan(cutoff: Date, limit: number): Promise<Transaction[]> {
+    const rows = await this.prisma.transaction.findMany({
+      where: { status: TRANSACTION_STATUS.PENDING, createdAt: { lt: cutoff } },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+    return rows.map(toDomain);
   }
 }
 

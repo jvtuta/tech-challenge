@@ -5,6 +5,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { PrismaService } from '../src/shared/infrastructure/prisma/prisma.service';
+import { PendingSweeper } from '../src/transactions/infrastructure/pending-sweeper';
 
 const validBody = {
   accountExternalIdDebit: '3b3a5b2e-6f1c-4c1e-9d1a-1e2f3a4b5c6d',
@@ -83,17 +84,30 @@ describe('transactions (e2e)', () => {
       expect(publisher.published).toHaveLength(0);
     });
 
-    it('does not keep the transaction when the broker refuses the event', async () => {
+    it('keeps the transaction when the broker refuses the event and lets the sweeper republish it', async () => {
       publisher.failWith(new Error('broker unavailable'));
 
       const { body } = await request(app.getHttpServer())
         .post('/transactions')
         .send(validBody)
-        .expect(503);
+        .expect(201);
 
-      expect(body.code).toBe('EVENT_PUBLISH_FAILED');
-      expect(await prisma.transaction.count()).toBe(0);
+      expect(body.transactionStatus.name).toBe('pending');
+      expect(await prisma.transaction.count()).toBe(1);
+      expect(publisher.published).toHaveLength(0);
+
+      // Envelhece a linha para passar do corte do varredor e simula o broker de volta.
+      await prisma.transaction.update({
+        where: { transactionExternalId: body.transactionExternalId },
+        data: { createdAt: new Date(Date.now() - 60_000) },
+      });
       publisher.recover();
+      const sweeper = app.get(PendingSweeper);
+
+      await expect(sweeper.sweep()).resolves.toBe(1);
+      expect(publisher.published.map((event) => event.key)).toEqual([body.transactionExternalId]);
+      await expect(sweeper.sweep()).resolves.toBe(1);
+      expect(publisher.published).toHaveLength(2);
     });
   });
 

@@ -7,6 +7,7 @@ export interface TransactionRepository {
   save(transaction: Transaction, context: PersistenceContext): Promise<void>;
   update(transaction: Transaction, context: PersistenceContext): Promise<void>;
   findByExternalId(transactionExternalId: string): Promise<Transaction | null>;
+  findPendingOlderThan(cutoff: Date, limit: number): Promise<Transaction[]>;
 }
 
 export const TRANSACTION_REPOSITORY = Symbol('TransactionRepository');
