@@ -203,3 +203,30 @@ como serviço do CI é mais simples e mais rápido que Testcontainers para um ú
 suíte porque o assunto dela é o serviço HTTP; o fluxo com o broker real tem a sua própria
 suíte junto com os consumidores. A configuração da borda é compartilhada para que o teste
 não passe com um pipe ou filtro diferente do que roda em produção.
+
+## Configuração vem do ambiente, lida por um único serviço
+
+**Decisão:** cada serviço tem um `EnvConfigService` em `shared/infrastructure/env-config`,
+sobre o `ConfigService` do `@nestjs/config`, com um getter nomeado por variável
+(`getPort`, `getDatabaseUrl`, `getKafkaBrokers`, `getKafkaClientId`). Getters obrigatórios
+lançam no boot nomeando a variável que falta; nenhum carrega valor padrão de host, porta ou
+identificador. O `.env.example` do enunciado é a única fonte dos valores locais, e o módulo
+procura o `.env` na raiz do monorepo porque cada app roda da própria pasta.
+
+**Alternativas consideradas:** `process.env.X ?? 'localhost:9092'` em cada ponto de uso,
+como estava; o mesmo serviço com valores padrão de desenvolvimento nos getters (`getPort()`
+caindo em uma porta fixa, brokers caindo em `localhost`), como faço em outros serviços
+meus; um schema `zod` aplicado a `process.env` no boot; um pacote de workspace só para
+ler ambiente.
+
+**Por quê:** o valor padrão em código é exatamente o host fixo que o PRACTICES.md
+proíbe, e é silencioso: um ambiente mal configurado sobe apontando para `localhost` e só
+falha quando a primeira mensagem não sai. Um valor padrão dentro do getter é a mesma
+porta fixa, só que mais escondida: o serviço sobe, parece configurado, e ninguém sabe que
+está usando o padrão. Nos meus outros serviços esse atalho existe para o ambiente de
+desenvolvimento; aqui o `.env.example` já cumpre esse papel sem esconder nada, então os
+getters obrigatórios não têm padrão algum. O serviço com getters nomeados é o padrão que eu
+uso nos meus outros serviços: a interface lista tudo que o serviço precisa do ambiente,
+cada getter é testado sem subir o Nest e quem injeta não sabe de onde o valor vem. O schema
+`zod` faria a mesma validação com menos código, mas espalharia a leitura por quem consome;
+um pacote próprio seria abstração para poucas linhas repetidas em dois serviços.
