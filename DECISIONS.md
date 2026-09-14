@@ -159,3 +159,20 @@ validar tudo no DTO.
 **Por quê:** o caso de uso não deve saber que existe HTTP; o mesmo código será chamado pelo
 consumidor Kafka, onde `503` não significa nada. Separar formato de regra evita que a regra
 de negócio dependa de decorators e permite testá-la sem subir o Nest.
+
+## Regra antifraude como função pura
+
+**Decisão:** a avaliação é uma função pura em `apps/anti-fraud`, `evaluateTransaction`, que
+recebe o que o evento carrega (id e valor) e devolve `approved` ou `rejected`. O limite de
+1000 é uma constante de negócio nomeada (`APPROVAL_LIMIT`), com a fronteira coberta por teste
+(999.99, 1000 e 1000.01). O consumidor Kafka só faz ler o evento, chamar a função e publicar
+o veredito.
+
+**Alternativas consideradas:** colocar a regra dentro do handler do consumidor; ler o limite de
+variável de ambiente; modelar a regra como serviço injetável do NestJS.
+
+**Por quê:** a regra é a única coisa que o serviço antifraude sabe, e é o que mais vale testar
+sem subir infraestrutura. Dentro do handler ela ficaria acoplada ao parse da mensagem e ao
+producer. O limite não é configuração de ambiente (como host ou credencial), é regra do
+negócio dada pelo enunciado: mudar o valor é uma decisão de produto, e tem que passar por
+código e teste. Um serviço injetável só acrescentaria decorator a uma função de uma linha.
