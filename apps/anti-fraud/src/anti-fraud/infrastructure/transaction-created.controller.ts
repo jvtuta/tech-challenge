@@ -1,17 +1,15 @@
-import { Controller, Inject, Logger } from '@nestjs/common';
-import { Ctx, EventPattern, type KafkaContext, Payload } from '@nestjs/microservices';
-import { TOPICS } from '@tech-challenge/contracts';
-import { EVENT_PUBLISHER, type EventPublisher, parseEnvelope } from '@tech-challenge/messaging';
+import { Controller, Inject, UseFilters } from '@nestjs/common';
+import { EventPattern, Payload } from '@nestjs/microservices';
+import { TOPICS, type TransactionCreatedEvent } from '@tech-challenge/contracts';
+import { EVENT_PUBLISHER, type EventPublisher } from '@tech-challenge/messaging';
+import { DiscardEventFilter } from '../../shared/infrastructure/messaging/discard-event.filter';
+import { EnvelopePipe } from '../../shared/infrastructure/messaging/envelope.pipe';
 import { handleTransactionCreated } from '../application/handle-transaction-created';
 
-/**
- * Borda Kafka do antifraude. Mensagem fora do contrato é descartada com log e o offset
- * avança; exceção do handler sobe, e o transporte do NestJS a trata como retriable: o offset
- * não é commitado e o broker reentrega a mensagem.
- */
+/** Borda Kafka do antifraude; o que fazer com cada erro é decisão do filter. */
 @Controller()
+@UseFilters(DiscardEventFilter)
 export class TransactionCreatedController {
-  private readonly logger = new Logger(TransactionCreatedController.name);
   private readonly handle: ReturnType<typeof handleTransactionCreated>;
 
   constructor(@Inject(EVENT_PUBLISHER) publisher: EventPublisher) {
@@ -20,17 +18,8 @@ export class TransactionCreatedController {
 
   @EventPattern(TOPICS.TRANSACTION_CREATED)
   async onTransactionCreated(
-    @Payload() payload: unknown,
-    @Ctx() context: KafkaContext,
+    @Payload(EnvelopePipe.of(TOPICS.TRANSACTION_CREATED)) event: TransactionCreatedEvent,
   ): Promise<void> {
-    const envelope = parseEnvelope(payload);
-    if (envelope?.eventType !== TOPICS.TRANSACTION_CREATED) {
-      const message = context.getMessage();
-      this.logger.warn(
-        `Discarding message outside the event contract (key=${message.key?.toString()}, offset=${message.offset})`,
-      );
-      return;
-    }
-    await this.handle(envelope);
+    await this.handle(event);
   }
 }
