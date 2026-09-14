@@ -27,5 +27,8 @@
       "^.+\\.ts$": "ts-jest"
     },
     "testEnvironment": "node"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
   }
 }
