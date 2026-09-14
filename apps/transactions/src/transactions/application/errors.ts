@@ -20,3 +20,12 @@ export class UnknownTransferTypeError extends DomainError {
     super(`Transfer type ${transferTypeId} does not exist`);
   }
 }
+
+export class TransactionNotFoundError extends DomainError {
+  readonly code = 'TRANSACTION_NOT_FOUND';
+  readonly httpStatus = 404;
+
+  constructor(transactionExternalId: string) {
+    super(`Transaction ${transactionExternalId} was not found`);
+  }
+}

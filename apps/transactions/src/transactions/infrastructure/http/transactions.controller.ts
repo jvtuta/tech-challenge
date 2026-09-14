@@ -1,6 +1,16 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+} from '@nestjs/common';
 import type { TransactionResponse } from '@tech-challenge/contracts';
 import { CreateTransaction } from '../../application/create-transaction.use-case';
+import { TransactionNotFoundError } from '../../application/errors';
 import { TransactionQueries } from '../persistence/transaction.queries';
 import { CreateTransactionDto } from './create-transaction.dto';
 
@@ -21,5 +31,16 @@ export class TransactionsController {
       throw new Error(`Transaction ${transactionExternalId} vanished right after being created`);
     }
     return created;
+  }
+
+  @Get(':transactionExternalId')
+  async findOne(
+    @Param('transactionExternalId', ParseUUIDPipe) transactionExternalId: string,
+  ): Promise<TransactionResponse> {
+    const transaction = await this.queries.findByExternalId(transactionExternalId);
+    if (!transaction) {
+      throw new TransactionNotFoundError(transactionExternalId);
+    }
+    return transaction;
   }
 }
