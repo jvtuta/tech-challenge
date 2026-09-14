@@ -29,6 +29,7 @@
     "testEnvironment": "node"
   },
   "dependencies": {
-    "@tech-challenge/contracts": "workspace:*"
+    "@tech-challenge/contracts": "workspace:*",
+    "kafkajs": "^2.2.4"
   }
 }

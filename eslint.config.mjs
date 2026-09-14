@@ -37,6 +37,14 @@ export default tseslint.config(
       '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
     },
   },
+  {
+    files: ['apps/transactions/**/*.ts', 'apps/anti-fraud/**/*.ts'],
+    rules: {
+      // Injeção por construtor do NestJS exige a classe em runtime (emitDecoratorMetadata);
+      // `import type` apagaria a referência e quebraria o DI.
+      '@typescript-eslint/consistent-type-imports': 'off',
+    },
+  },
   // Regras do Next.js só para o dashboard; o plugin precisa saber onde fica a raiz do app.
   ...compat
     .extends('next/core-web-vitals', 'next/typescript')
