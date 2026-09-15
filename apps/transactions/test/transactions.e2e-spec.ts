@@ -6,6 +6,8 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { PrismaService } from '../src/shared/infrastructure/prisma/prisma.service';
 import { PendingSweeper } from '../src/transactions/infrastructure/pending-sweeper';
+import { SearchParams } from '../src/shared/domain/searchable-repository';
+import { TransactionQueries } from '../src/transactions/infrastructure/persistence/transaction.queries';
 
 const validBody = {
   accountExternalIdDebit: '3b3a5b2e-6f1c-4c1e-9d1a-1e2f3a4b5c6d',
@@ -185,6 +187,38 @@ describe('transactions (e2e)', () => {
       expect(
         body.items.map((item: { transactionExternalId: string }) => item.transactionExternalId),
       ).toEqual([cheap, middle, expensive]);
+    });
+
+    it('reads the page and the total from the same snapshot', async () => {
+      await create(1, 10);
+      await create(1, 20);
+
+      // Commita uma linha por fora entre os dois statements do `search`. Em READ COMMITTED,
+      // o padrão do PostgreSQL, o `count` veria a linha nova e o total viria 3 com dois
+      // itens na página; com o snapshot fixado, os dois statements veem a mesma versão.
+      let insertedBetweenStatements = false;
+      const hooked = prisma.$extends({
+        query: {
+          transaction: {
+            async findMany({ args, query }) {
+              const rows = await query(args);
+              if (!insertedBetweenStatements) {
+                insertedBetweenStatements = true;
+                await create(1, 30);
+              }
+              return rows;
+            },
+          },
+        },
+      });
+      // O cliente estendido cumpre o que o read model usa; o molde só existe para o teste.
+      const queries = new TransactionQueries(hooked as unknown as PrismaService);
+
+      const result = await queries.search(new SearchParams({ page: 1, perPage: 10 }));
+
+      expect(insertedBetweenStatements).toBe(true);
+      expect(result.total).toBe(2);
+      expect(result.items).toHaveLength(result.total);
     });
 
     it('rejects filters outside the contract with 400', async () => {

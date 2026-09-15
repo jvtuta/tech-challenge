@@ -36,21 +36,34 @@ export class TransactionQueries implements SearchableRepository<
     return row ? toResponse(row) : null;
   }
 
-  /** `total` vem da mesma transação do banco para a contagem bater com a página. */
+  /**
+   * A página e o `total` saem do mesmo snapshot. Estar na mesma transação não basta: em
+   * `READ COMMITTED`, o padrão do PostgreSQL, cada statement tira o seu próprio snapshot, e
+   * uma escrita concorrente entre os dois desalinha a contagem. `REPEATABLE READ` fixa o
+   * snapshot no primeiro statement, e como a transação é só de leitura não há erro de
+   * serialização para tratar.
+   *
+   * O callback não é exigido pela garantia: a forma em lote aceita a mesma opção e custa uma
+   * ida menos ao engine. Está aqui porque no lote as duas consultas saem em uma requisição, e
+   * o teste que insere uma linha entre elas passa até sem isolamento: a prova se perderia.
+   */
   async search(
     params: SearchParams<TransactionFilter>,
   ): Promise<SearchResult<TransactionResponse, TransactionFilter>> {
     const where = toWhere(params.filter);
-    const [rows, total] = await this.prisma.$transaction([
-      this.prisma.transaction.findMany({
-        where,
-        include: { transferType: { select: { name: true } } },
-        orderBy: toOrderBy(params, this.sortableFields),
-        skip: (params.page - 1) * params.perPage,
-        take: params.perPage,
-      }),
-      this.prisma.transaction.count({ where }),
-    ]);
+    const { rows, total } = await this.prisma.$transaction(
+      async (client) => {
+        const page = await client.transaction.findMany({
+          where,
+          include: { transferType: { select: { name: true } } },
+          orderBy: toOrderBy(params, this.sortableFields),
+          skip: (params.page - 1) * params.perPage,
+          take: params.perPage,
+        });
+        return { rows: page, total: await client.transaction.count({ where }) };
+      },
+      { isolationLevel: 'RepeatableRead' },
+    );
     return new SearchResult({ items: rows.map(toResponse), total, params });
   }
 }

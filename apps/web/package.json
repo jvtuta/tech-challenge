@@ -7,8 +7,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "jest",
-    "test:watch": "jest --watch"
+    "test": "TZ=America/Sao_Paulo jest && TZ=UTC jest transactions-filters && TZ=Asia/Tokyo jest transactions-filters",
+    "test:watch": "TZ=America/Sao_Paulo jest --watch"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
