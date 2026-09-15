@@ -6,6 +6,7 @@
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
+    "dev": "nest start --watch",
     "start:prod": "node dist/main",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "jest",
@@ -13,8 +14,6 @@
     "test:e2e": "jest --selectProjects e2e",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate deploy",
-    "db:migrate:dev": "prisma migrate dev",
     "test:watch": "jest --watch"
   },
   "dependencies": {

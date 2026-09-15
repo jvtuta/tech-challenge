@@ -31,17 +31,22 @@ flowchart LR
 **`apps/transactions`**: `POST /transactions` valida o corpo, grava a transação como
 `pending` e, depois do commit, publica `transaction.created` com a chave igual ao id externo.
 Se o broker recusar, a resposta continua sendo `201` e um varredor republica o evento das
-pendentes com mais de 10 segundos, a cada 5 segundos. O consumer de
-`transaction.status.updated` aplica o veredito só a partir de `pending`, então um evento
-duplicado não muda nada, e desiste da mensagem depois de três entregas para não prender a
-partição enquanto o banco estiver fora: a transação segue pendente e o varredor recupera. `GET /transactions/:id` devolve uma transação, `GET /transactions`
-lista com filtros, paginação e ordenação, e `GET /transactions/:id/events` é um stream
-Server-Sent Events que entrega o status atual e cada mudança até o estado final.
+pendentes com mais de 10 segundos, a cada 5 segundos, em lotes de até 100 por passada. O
+varredor roda em cada instância do serviço, sem lock: republicar o mesmo evento duas vezes é
+inócuo, porque a regra é determinística e o status só muda a partir de `pending`.
+
+O consumer de `transaction.status.updated` aplica o veredito só a partir de `pending`, então
+um evento duplicado não muda nada, e desiste da mensagem na terceira entrega para não prender
+a partição enquanto o banco estiver fora: a transação segue pendente e o varredor recupera.
+`GET /transactions/:id` devolve uma transação, `GET /transactions` lista com filtros,
+paginação e ordenação, e `GET /transactions/:id/events` é um stream Server-Sent Events que
+entrega o status atual e cada mudança até o estado final.
 
 **`apps/anti-fraud`**: consome `transaction.created`, aplica a regra (valor acima de 1000
 rejeita, 1000 exato aprova) por uma função pura e publica `transaction.status.updated`.
-Eventos fora do contrato são descartados com log; falha de infraestrutura é reentregue até
-três vezes e depois abandonada, pelo mesmo motivo. `GET /health` responde pela conexão real com o Kafka.
+Eventos fora do contrato são descartados com log; falha de infraestrutura é reentregue e
+abandonada na terceira entrega da mesma mensagem, pelo mesmo motivo. `GET /health` responde
+pela conexão real com o Kafka.
 
 **`apps/web`**: listagem paginada com filtros por status, tipo, período e ordenação; detalhe
 que assina o stream SSE enquanto a transação está pendente e mostra o veredito assim que
@@ -56,7 +61,8 @@ adapter KafkaJS com falha rápida, publisher em memória para testes e a criaç�
 no boot de cada serviço.
 
 Medido na máquina local: o veredito fica visível entre 10 e 40 ms depois do `POST`; com o
-broker fora do ar, o `POST` responde em cerca de 300 ms.
+broker fora do ar, o `POST` responde entre 0,3 e 0,7 s, dependendo de a conexão ser
+recusada de imediato ou expirar no limite de 1 s do producer.
 
 ## Como rodar
 
@@ -69,16 +75,26 @@ pnpm install
 pnpm db:migrate
 ```
 
-Isso sobe Postgres, Kafka e Kafka UI, instala as dependências, gera o cliente Prisma e aplica
-as migrations (que também semeiam os tipos de transferência: 1 transferência, 2 pagamento,
-3 saque). Os tópicos do Kafka são criados pelos serviços ao subir.
+Isso sobe Postgres, Kafka e Kafka UI, instala as dependências, compila os dois pacotes
+compartilhados (os serviços os resolvem por `dist`, então o `pnpm install` já os constrói),
+gera o cliente Prisma e aplica as migrations, que também semeiam os tipos de transferência:
+1 transferência, 2 pagamento, 3 saque. Os tópicos do Kafka são criados pelos serviços ao
+subir.
 
-Depois, em três terminais:
+Depois, um comando sobe os três:
 
 ```bash
-pnpm --filter @tech-challenge/transactions start:dev   # http://localhost:3001
-pnpm --filter @tech-challenge/anti-fraud start:dev     # http://localhost:3002/health
-pnpm --filter @tech-challenge/web dev                  # http://localhost:3000
+pnpm dev
+```
+
+Ele compila os pacotes compartilhados e sobe API, antifraude e dashboard em paralelo, com o
+nome do app na frente de cada linha de log; `Ctrl+C` derruba os três. Para reiniciar ou
+acompanhar um serviço isolado, cada um sobe sozinho:
+
+```bash
+pnpm --filter @tech-challenge/transactions dev   # http://localhost:3001
+pnpm --filter @tech-challenge/anti-fraud dev     # http://localhost:3002/health
+pnpm --filter @tech-challenge/web dev            # http://localhost:3000
 ```
 
 As portas vêm do `.env`; nenhum serviço tem host ou porta em código. O Kafka UI fica em
@@ -88,12 +104,15 @@ http://localhost:8080 para inspecionar os tópicos.
 
 ```bash
 pnpm quality        # lint, typecheck, format:check, test e build, na ordem; é o que o CI roda
-pnpm test           # só os testes: 112 no total
+pnpm test           # só os testes; o total sai no resumo do Jest
 ```
 
-Os testes de ponta a ponta dos serviços usam o Postgres e o Kafka do `docker compose`, lendo
-o mesmo `.env`; a infra precisa estar de pé. Os testes unitários e os do dashboard não
-dependem de nada externo.
+Os testes de integração são **por serviço**, contra a infraestrutura real do
+`docker compose`, lendo o mesmo `.env`: o de transações sobe o `AppModule` com o Postgres e
+troca só o publisher; o de status e o do antifraude falam com o Kafka de verdade, cada um
+produzindo as mensagens de que precisa. **Nenhuma suíte sobe os dois serviços juntos**, então
+o ciclo completo (criar, antifraude decidir, status atualizar) é verificação manual, descrita
+em "Como usar a API". Os testes unitários e os do dashboard não dependem de nada externo.
 
 ```bash
 pnpm --filter @tech-challenge/transactions test:unit                        # sem infra
@@ -104,15 +123,16 @@ pnpm --filter @tech-challenge/anti-fraud exec jest -t "1000"                # po
 
 O que cada suíte cobre:
 
-- **transactions** (61): entidade e transição de status; criação com publicação após o
-  commit e com o broker recusando; varredor de pendentes; consumer de status idempotente e
-  veredito órfão; listagem com filtros, ordenação e paginação; SSE até o estado final;
-  filtro de erros de negócio, com o teto de reentregas; health.
-- **anti-fraud** (20): regra na fronteira (999.99, 1000, 1000.01); consumer publicando o
-  veredito com a chave certa; descarte de evento fora do contrato e teto de reentregas; health com o broker fora.
-- **messaging** (19) e **contracts** (2): interface fluente, envelope, validação,
-  orçamento de reentregas e publisher em memória.
-- **web** (10): três estados da listagem e a tabela; validação, gerador de UUID e envio do
+- **transactions**: entidade e transição de status; criação com publicação após o commit e
+  com o broker recusando; varredor de pendentes; consumer de status idempotente e veredito
+  órfão; listagem com filtros, ordenação, paginação e página e total no mesmo snapshot; SSE
+  até o estado final; filtro de erros de negócio, com o teto de reentregas; health.
+- **anti-fraud**: regra na fronteira (999.99, 1000, 1000.01); consumer publicando o veredito
+  com a chave certa; descarte de evento fora do contrato e teto de reentregas; health com o
+  broker fora.
+- **messaging** e **contracts**: interface fluente, envelope, validação, orçamento de
+  reentregas e publisher em memória.
+- **web**: três estados da listagem e a tabela; validação, gerador de UUID e envio do
   formulário; detalhe reagindo ao SSE e 404; boundary de erro.
 
 O CI (`.github/workflows/quality.yml`) sobe Postgres e Kafka de verdade e roda exatamente

@@ -26,8 +26,10 @@ unidade de trabalho e publicação de eventos por portas) e `infrastructure` (co
 HTTP, controllers Kafka, SSE, repositório Prisma). O que é transversal fica em `shared` com
 as mesmas três camadas: erro de negócio com categoria semântica, unidade de trabalho,
 configuração, Prisma e o filtro que traduz erro em HTTP. A dependência aponta sempre para
-dentro: o domínio não conhece Nest nem Prisma; a aplicação conhece só as portas; a
-infraestrutura implementa as portas e é a única que conhece o framework. Não há barramento
+dentro: o domínio não conhece Nest nem Prisma; a aplicação depende das portas para alcançar
+domínio, persistência e mensageria, e do Nest só para a injeção por construtor (`@Injectable`,
+`@Inject`) e o `Logger`; a infraestrutura é a única que conhece o framework como tal, ou seja
+HTTP, transporte Kafka, SSE e Prisma. Não há barramento
 de comandos, eventos de domínio internos nem agregado com classe base: a entidade é uma
 classe simples com os métodos que a regra pede.
 
@@ -48,6 +50,19 @@ aqui há uma entidade e duas transições, e cada peça a mais seria uma peça a
 ninguém a usar. Organizar por tipo de arquivo espalha uma funcionalidade por pastas
 distantes e esconde a direção das dependências, que é o que a arquitetura existe para
 mostrar.
+
+Os casos de uso do serviço de transações importam `@Injectable`, `@Inject` e `Logger` do
+Nest, e essa é uma concessão consciente, não um descuido: a alternativa é declarar cada caso
+de uso como `useFactory` no módulo, listando as dependências à mão, e trocar o `Logger` por
+uma porta própria com adapter. Isso compraria uma camada de aplicação sem nenhum import do
+framework ao custo de uma fábrica por caso de uso e de uma porta com uma implementação só,
+que é exatamente o tipo de peça que esta entrega decidiu não ter. O que a direção das
+dependências protege de fato é o que muda quando a infraestrutura muda, e nada disso muda:
+os decoradores são metadados de injeção e o `Logger` escreve em `stdout`. Os testes provam:
+os casos de uso são instanciados com `new` e adapters em memória, sem subir o Nest. O
+antifraude, cujo caso de uso é uma função pura sem nenhum import do framework, mostra o outro
+extremo do mesmo desenho; se algum dia o serviço de transações precisar rodar fora do Nest,
+é a fábrica no módulo que entra.
 
 ## Ferramentas de qualidade na raiz
 
@@ -171,9 +186,18 @@ status só muda o que está pendente. O outbox faz o mesmo com uma fila própria
 milissegundos, ao custo de tabela, relay e retenção; é o próximo passo quando o volume
 justificar. O producer passa a tentar pouco (duas tentativas curtas, conexão com limite de 1 s): quem
 publica já gravou o que tinha que gravar, e a recuperação é do varredor; medido, o `POST` com
-o broker fora caiu de 12,5 s para cerca de 300 ms. Os 10 s do corte são uma ordem de
+o broker fora caiu de 12,5 s para algo entre 0,3 e 0,7 s, conforme a conexão seja recusada
+de imediato ou expire no limite de 1 s. Os 10 s do corte são uma ordem de
 grandeza acima do pior caso medido de veredito e das tentativas do producer; os 5 s do
 intervalo mantêm a recuperação curta sem pesar na tabela.
+
+**Limites do varredor**, para não prometer mais do que ele faz: cada passada republica no
+máximo 100 pendentes (`SWEEP_BATCH_SIZE`), então o teto de recuperação é 100 a cada 5 s por
+instância; uma indisponibilidade que deixe mais que isso acumulado é drenada em passadas
+sucessivas, não de uma vez. O timer vive em cada instância e não há lock: com N réplicas, a
+mesma pendente é republicada N vezes por passada, o que é inócuo porque a regra do antifraude
+é determinística e o status só muda a partir de `pending`, mas multiplica mensagens por N. É
+o ponto em que o outbox com relay eleito deixa de ser luxo.
 
 ## Leituras fora dos casos de uso
 
@@ -238,13 +262,25 @@ o `main.ts` e os testes.
 **Alternativas consideradas:** mockar o Prisma nos testes de ponta a ponta; usar
 Testcontainers para subir o banco de dentro do Jest; subir também o Kafka nesta suíte.
 
-**Por quê:** o comportamento que mais importa provar aqui é a transação do banco desfazendo a
-gravação quando o evento não sai, e um mock do Prisma não prova nada sobre isso. O banco
-como serviço do CI é mais simples e mais rápido que Testcontainers para um único banco, e o
+**Por quê:** o que mais importa provar aqui é o que só o banco de verdade responde: que a
+transação nasce pendente e é lida de volta no contrato, que o tipo de transferência
+inexistente vira `422` pela violação de chave estrangeira, que a listagem casa com os índices
+compostos, e que a página e a contagem saem do mesmo snapshot. Um mock do Prisma não prova
+nada disso, porque o que está sob teste é o comportamento do banco. O banco como serviço do
+CI é mais simples e mais rápido que Testcontainers para um único banco, e o
 `docker-compose.yml` do enunciado já dá o mesmo ambiente localmente. O Kafka fica fora desta
-suíte porque o assunto dela é o serviço HTTP; o fluxo com o broker real tem a sua própria
-suíte junto com os consumidores. A configuração da borda é compartilhada para que o teste
-não passe com um pipe ou filtro diferente do que roda em produção.
+suíte porque o assunto dela é o serviço HTTP; o broker real aparece na suíte do consumer de
+status e na do antifraude. A configuração da borda é compartilhada para que o teste não passe
+com um pipe ou filtro diferente do que roda em produção.
+
+**Limite desta estratégia:** cada suíte sobe **um** serviço. A de status produz ela mesma o
+`transaction.status.updated` que o antifraude produziria, e a do antifraude verifica o
+veredito que publica, mas nenhuma sobe os dois processos juntos. Ou seja, o ciclo completo
+(criar, antifraude decidir, status atualizar) não está coberto por teste automatizado: é
+verificação manual, com os dois serviços de pé, e está no README. Cobri-lo pediria um
+orquestrador subindo dois processos e esperando convergência, com o custo de flakiness que
+isso traz; o que ele acrescentaria sobre as duas suítes é só a fiação entre elas, que é a
+mesma constante de tópico do pacote de contratos nos dois lados.
 
 ## Configuração vem do ambiente, lida por um único serviço
 
@@ -407,8 +443,17 @@ registrado em "Leituras fora dos casos de uso". O dashboard mostra "página X de
 do total; `offset` com `total` é o que a tela pede e é barato no volume do enunciado. Cursor é
 mais estável sob inserção concorrente e mais eficiente em páginas profundas, e é o caminho se
 o volume crescer, mas não permite pular para uma página arbitrária, que é o que a interface
-oferece. O limite de 100 impede que um único pedido leia a tabela inteira. `total` na mesma
-transação garante que a página e a contagem sejam do mesmo instante.
+oferece. O limite de 100 impede que um único pedido leia a tabela inteira.
+
+A página e o `total` saem do mesmo snapshot, e a transação sozinha não bastava para isso: o
+padrão do PostgreSQL é `READ COMMITTED`, em que cada statement tira o próprio snapshot, então
+uma criação commitada entre o `findMany` e o `count` devolvia um total que não fechava com a
+página. A consulta roda em `REPEATABLE READ`, que fixa o snapshot no primeiro statement. A
+alternativa era admitir a divergência na documentação e deixar a interface conviver com ela,
+que é defensável quando o total é só um número na tela, mas custava uma explicação a cada
+revisão; e `SERIALIZABLE` daria a mesma leitura com risco de erro de serialização para
+tratar, sem ganho aqui, porque a transação é só de leitura e não decide escrita nenhuma. O
+teste commita uma linha entre os dois statements e falha em `READ COMMITTED`.
 
 ## Atualização de status na interface
 
