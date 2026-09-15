@@ -43,7 +43,9 @@ rejeita, 1000 exato aprova) por uma função pura e publica `transaction.status.
 Eventos fora do contrato são descartados com log; falha de infraestrutura é reentregue até
 três vezes e depois abandonada, pelo mesmo motivo. `GET /health` responde pela conexão real com o Kafka.
 
-**`apps/web`**: listagem paginada com filtros por status, tipo, período e ordenação; detalhe
+**`apps/web`**: listagem paginada com filtros por status, tipo, período e ordenação, que
+reconsulta a página enquanto houver transação pendente nela e para quando não houver;
+detalhe
 que assina o stream SSE enquanto a transação está pendente e mostra o veredito assim que
 chega; formulário de criação validado com as mesmas regras do serviço, com um gerador de UUID
 em cada campo de conta. Carregando, erro e vazio são componentes explícitos, alcançáveis por
@@ -165,9 +167,11 @@ Cada item abaixo tem o porquê e o momento em que entraria no `DECISIONS.md`.
   falha de publicação com menos partes, e o teto de reentregas devolve a mensagem travada ao
   mesmo varredor; o outbox entra quando o volume pedir recuperação em milissegundos, e uma
   fila própria quando houver o que fazer com o evento abandonado além do log.
-- **Listagem em tempo real**: só o detalhe assina o SSE; a listagem consulta ao filtrar ou
-  paginar. Um stream global da listagem exige fan-out fora da memória do processo quando
-  houver mais de uma réplica.
+- **Descoberta de transação nova na listagem**: a listagem reconsulta enquanto houver
+  pendente na página visível, então uma pendente à vista chega ao estado final sozinha, mas
+  uma lista vazia continua vazia e quem está no filtro de aprovadas não vê uma aprovação
+  chegar. Um stream da listagem cobriria isso e exige fan-out fora da memória do processo
+  assim que houver mais de uma réplica.
 - **Autenticação e autorização**: a API aceita qualquer origem e não há sessão no
   dashboard.
 - **OpenAPI, Playwright, histórico de status, cache**: não fazem parte do problema neste

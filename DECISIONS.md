@@ -433,6 +433,71 @@ com duas instâncias do serviço, o veredito aplicado em uma não chega ao strea
 outra; a evolução é um pub/sub compartilhado (Redis) entre as instâncias, e a tela continua
 correta mesmo sem ele porque a consulta direta sempre reflete o banco.
 
+## Listagem acompanhando o veredito por reconsulta condicionada
+
+**Decisão:** enquanto a página visível da listagem tiver alguma transação pendente, o
+dashboard reconsulta a mesma página de dois em dois segundos; quando não tiver mais nenhuma,
+a reconsulta para. O que volta é a página inteira, com `items`, `page`, `pageSize` e `total`
+dos mesmos filtros, e não o status de uma linha. Se a página aberta deixar de existir depois
+da atualização, a navegação volta para a última que existe. O detalhe continua no SSE.
+
+**Alternativas consideradas:** um stream da listagem, com o servidor empurrando cada mudança
+para quem estiver com a tela aberta; invalidar a listagem apenas quando o detalhe recebe o
+veredito, que é o que já acontecia; reconsultar em intervalo fixo, independente do que está
+na tela.
+
+**Por quê:** só o detalhe assinava o stream, então quem ficava na listagem via `pending` até
+trocar de filtro ou de página. Um stream da listagem exigiria assinatura por combinação de
+filtro, ou um canal único com o cliente decidindo o que interessa, e nas duas formas o
+fan-out precisa sair da memória do processo assim que existir mais de uma réplica, que é o
+mesmo limite já registrado acima, agora multiplicado pelas telas abertas. A reconsulta usa a
+mesma consulta que a tela já faz e some do código no instante em que não há pendente. Atualizar
+só o badge da linha seria pior que não atualizar: no filtro de pendentes, a linha que recebeu
+o veredito deixa de casar com o filtro, e a tela mostraria uma aprovada dentro de uma lista de
+pendentes, com o total errado; reconsultar a página resolve as três coisas (item, filtro e
+total) com uma requisição. Intervalo fixo independente da tela gastaria requisições em telas
+que não têm nada para mudar, que é a maioria.
+
+Os dois segundos não são a latência esperada do veredito, que fica visível entre 10 e 40 ms
+depois da criação; quem cobre esse caso é o próprio refresh que acontece logo depois de
+criar. O intervalo existe para o caso raro: o broker recusou a publicação e a recuperação
+depende do varredor, que espera 10 s de carência e passa a cada 5 s. Dois segundos mantêm a
+tela viva dentro dessa janela sem passar de trinta requisições por minuto por aba aberta.
+
+**Limite conhecido:** a reconsulta é condicionada a pendente **visível**, então ela não
+descobre transação nova. Uma lista vazia continua vazia até o usuário agir, e quem está no
+filtro de aprovadas não vê uma aprovação chegar. Isso é deliberado: descobrir criação alheia
+pediria reconsulta permanente em toda tela aberta, e o dashboard deste recorte tem um usuário
+por vez, que cria pela própria tela e é levado ao detalhe. Com mais de um operador na mesma
+lista, o caminho é o stream da listagem com fan-out compartilhado, e aí o custo passa a
+valer.
+
+## Período do filtro no fuso do navegador
+
+**Decisão:** o campo de período fala no fuso do navegador e o filtro viaja para a API como
+instante ISO com fuso. A ida usa `new Date` sobre a string sem fuso do `datetime-local`, que
+a especificação já interpreta como local; a volta monta a string com os getters locais.
+Valor impossível de interpretar aparece como campo vazio, e período invertido mostra aviso em
+vez de uma lista vazia sem explicação.
+
+**Alternativas consideradas:** tratar o que o usuário digita como UTC, mandando a string
+crua para a API; guardar o período como texto local e converter só no servidor; usar uma
+biblioteca de datas com fuso explícito.
+
+**Por quê:** a volta usava `toISOString().slice(0, 16)`, que imprime o horário em UTC dentro
+de um campo controlado: em `America/Sao_Paulo` o campo pulava três horas no primeiro
+re-render e o desvio acumulava a cada edição. Tratar o digitado como UTC deixaria o campo
+estável ao custo de filtrar o período errado, que é o pior dos dois. Converter no servidor
+obrigaria a API a receber fuso por fora do valor, e o contrato já é ISO com fuso. Uma
+biblioteca resolveria o mesmo com uma dependência: são duas funções de dez linhas, cobertas
+por teste.
+
+O fuso do V8 vem do ambiente do processo, e atribuir `process.env.TZ` dentro do Jest não o
+muda, então a suíte do dashboard roda fixada em um fuso e repete o período em `UTC` e em
+`Asia/Tokyo`. Isso não é zelo excessivo: o código com o defeito **passa** em `UTC`, porque lá
+as duas conversões coincidem. Um teste rodando no fuso da máquina daria verde na máquina
+errada.
+
 ## Dashboard organizado por funcionalidade, com estado remoto no TanStack Query
 
 **Decisão:** o dashboard Next.js separa `features/transactions` (chamadas à API, hooks e
