@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTransactions } from '../hooks';
 import { Pagination } from './pagination';
 import { TransactionsFilters, type Filters } from './transactions-filters';
@@ -19,6 +19,19 @@ export function TransactionsList() {
     setFilters(next);
     setPage(1);
   };
+
+  // Uma pendente que recebe o veredito pode sair do filtro e encurtar a listagem. Se a página
+  // aberta deixou de existir, volta para a última que existe em vez de mostrar tela vazia.
+  const data = query.data;
+  useEffect(() => {
+    if (!data || data.total === 0) {
+      return;
+    }
+    const lastPage = Math.max(1, Math.ceil(data.total / data.pageSize));
+    if (page > lastPage) {
+      setPage(lastPage);
+    }
+  }, [data, page]);
 
   return (
     <section className="flex flex-col gap-4">
