@@ -1,6 +1,8 @@
 import type { Snapshotable } from '../../shared/testing/in-memory-unit-of-work';
-import type { Transaction } from '../domain/transaction';
-import type { TransactionRepository } from '../domain/transaction.repository';
+import { Transaction, type FinalStatus } from '../domain/transaction';
+import { settleOutcome } from '../domain/settle-outcome';
+import type { SettleResult, TransactionRepository } from '../domain/transaction.repository';
+import { TransactionValue } from '../domain/transaction-value.vo';
 
 export class InMemoryTransactionRepository implements TransactionRepository, Snapshotable {
   private rows = new Map<string, Transaction>();
@@ -9,8 +11,28 @@ export class InMemoryTransactionRepository implements TransactionRepository, Sna
     this.rows.set(transaction.transactionExternalId, transaction);
   }
 
-  async update(transaction: Transaction): Promise<void> {
-    this.rows.set(transaction.transactionExternalId, transaction);
+  /** Mesma semântica condicional do adapter Prisma: grava só se ainda estiver pendente. */
+  async settle(transactionExternalId: string, status: FinalStatus): Promise<SettleResult> {
+    const current = this.rows.get(transactionExternalId);
+    if (!current) {
+      return 'not-found';
+    }
+    const outcome = settleOutcome(current.status, status);
+    if (outcome === 'settled') {
+      this.rows.set(
+        transactionExternalId,
+        Transaction.restore({
+          transactionExternalId: current.transactionExternalId,
+          accountExternalIdDebit: current.accountExternalIdDebit,
+          accountExternalIdCredit: current.accountExternalIdCredit,
+          transferTypeId: current.transferTypeId,
+          value: TransactionValue.of(current.value),
+          status,
+          createdAt: current.createdAt,
+        }),
+      );
+    }
+    return outcome;
   }
 
   async findByExternalId(transactionExternalId: string): Promise<Transaction | null> {
