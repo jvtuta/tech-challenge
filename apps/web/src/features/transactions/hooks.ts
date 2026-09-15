@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CreateTransactionRequest,
   ListTransactionsQuery,
+  TransactionListResponse,
   TransactionResponse,
 } from '@tech-challenge/contracts';
 import { createTransaction, getTransaction, listTransactions, subscribeToStatus } from './api';
@@ -14,10 +15,26 @@ export const transactionKeys = {
   detail: (id: string) => ['transactions', 'detail', id] as const,
 };
 
+/**
+ * Intervalo entre reconsultas da listagem, usado só enquanto há pendente na página visível.
+ * Não é a latência esperada do veredito, que chega em dezenas de milissegundos: é o teto do
+ * caso raro, o do broker que recusou a publicação e cuja recuperação depende do varredor
+ * (carência de 10 s mais o intervalo de 5 s da passada). Dois segundos mantêm a tela viva sem
+ * passar de trinta requisições por minuto por aba aberta.
+ */
+export const LIST_POLL_INTERVAL_MS = 2_000;
+
+const hasPendingItem = (data: TransactionListResponse | undefined): boolean =>
+  data?.items.some((item) => item.transactionStatus.name === 'pending') ?? false;
+
 export function useTransactions(query: ListTransactionsQuery) {
   return useQuery({
     queryKey: transactionKeys.list(query),
     queryFn: () => listTransactions(query),
+    // Reconsulta a página inteira, e não o status de uma linha: quando o veredito chega, a
+    // linha pode deixar de casar com o filtro e o total muda junto. Para sozinha quando não
+    // há mais pendente à vista, e o React Query limpa o timer ao desmontar.
+    refetchInterval: ({ state }) => (hasPendingItem(state.data) ? LIST_POLL_INTERVAL_MS : false),
   });
 }
 
