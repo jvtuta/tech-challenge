@@ -31,12 +31,16 @@ flowchart LR
 **`apps/transactions`**: `POST /transactions` valida o corpo, grava a transação como
 `pending` e, depois do commit, publica `transaction.created` com a chave igual ao id externo.
 Se o broker recusar, a resposta continua sendo `201` e um varredor republica o evento das
-pendentes com mais de 10 segundos, a cada 5 segundos. O consumer de
-`transaction.status.updated` aplica o veredito só a partir de `pending`, então um evento
-duplicado não muda nada, e desiste da mensagem depois de três entregas para não prender a
-partição enquanto o banco estiver fora: a transação segue pendente e o varredor recupera. `GET /transactions/:id` devolve uma transação, `GET /transactions`
-lista com filtros, paginação e ordenação, e `GET /transactions/:id/events` é um stream
-Server-Sent Events que entrega o status atual e cada mudança até o estado final.
+pendentes com mais de 10 segundos, a cada 5 segundos. O consumer de `transaction.status.updated` aplica o veredito por uma escrita condicionada ao
+status ainda ser `pending`, no `where` do `UPDATE`: duas aplicações concorrentes produzem uma
+transição, dois vereditos opostos deixam um resultado, e uma duplicata não muda nada nem
+notifica de novo. A mensagem é abandonada na terceira entrega para não prender a partição
+enquanto o banco estiver fora: a transação segue pendente e o varredor recupera.
+
+`GET /transactions/:id` devolve uma transação, `GET /transactions` lista com filtros,
+paginação e ordenação, e `GET /transactions/:id/events` é um stream Server-Sent Events que
+assina o fan-out antes de ler o status atual, entrega o atual e cada mudança, e fecha no
+estado final.
 
 **`apps/anti-fraud`**: consome `transaction.created`, aplica a regra (valor acima de 1000
 rejeita, 1000 exato aprova) por uma função pura e publica `transaction.status.updated`.
@@ -88,7 +92,7 @@ http://localhost:8080 para inspecionar os tópicos.
 
 ```bash
 pnpm quality        # lint, typecheck, format:check, test e build, na ordem; é o que o CI roda
-pnpm test           # só os testes: 112 no total
+pnpm test           # só os testes; o total sai no resumo do Jest
 ```
 
 Os testes de ponta a ponta dos serviços usam o Postgres e o Kafka do `docker compose`, lendo
@@ -104,10 +108,11 @@ pnpm --filter @tech-challenge/anti-fraud exec jest -t "1000"                # po
 
 O que cada suíte cobre:
 
-- **transactions** (61): entidade e transição de status; criação com publicação após o
-  commit e com o broker recusando; varredor de pendentes; consumer de status idempotente e
-  veredito órfão; listagem com filtros, ordenação e paginação; SSE até o estado final;
-  filtro de erros de negócio, com o teto de reentregas; health.
+- **transactions**: entidade e regra da transição; criação com publicação após o
+  commit e com o broker recusando; varredor de pendentes; veredito aplicado por escrita
+  condicional, com vereditos concorrentes e opostos contra o Postgres real; veredito órfão;
+  listagem com filtros, ordenação e paginação; SSE com mudança dentro da janela de assinatura
+  e os status HTTP do stream; filtro de erros de negócio, com o teto de reentregas; health.
 - **anti-fraud** (20): regra na fronteira (999.99, 1000, 1000.01); consumer publicando o
   veredito com a chave certa; descarte de evento fora do contrato e teto de reentregas; health com o broker fora.
 - **messaging** (19) e **contracts** (2): interface fluente, envelope, validação,

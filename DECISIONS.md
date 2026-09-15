@@ -351,21 +351,42 @@ não teriam como saber. Indicadores alheios ao trabalho do serviço só acrescen
 
 ## Atualização de status idempotente, a partir de `pending`
 
-**Decisão:** o veredito do antifraude é aplicado pelo caso de uso `UpdateTransactionStatus`,
-que carrega a transação e chama `settle(status)` no domínio. Só uma transação `pending`
-muda; o mesmo veredito entregue de novo não altera nada e não grava; um veredito diferente
-sobre uma transação já decidida é recusado (`TransactionAlreadySettledError`), porque o
-primeiro veredito é o que valeu. No consumer Kafka do serviço de transações, o envelope é validado por
+**Decisão:** o veredito é aplicado por uma **escrita condicional**: um `UPDATE` cujo `where`
+exige o id **e** o status `pending`. Se casou, houve transição; se não casou, uma leitura no
+mesmo contexto diz se o id nunca existiu, se o veredito já estava aplicado (duplicata) ou se
+é outro veredito sobre uma transação já decidida (`TransactionAlreadySettledError`), porque o
+primeiro veredito é o que valeu. A persistência devolve qual dos quatro resultados aconteceu,
+e o caso de uso não lê para decidir. A notificação para a interface só sai depois de a
+transição ter sido persistida. No consumer Kafka do serviço de transações, o envelope é validado por
 um pipe no `@Payload` e a categoria do erro decide o destino da mensagem em um único filter
 (`DiscardEventFilter`), que vale para todos os handlers Kafka do serviço: erro de negócio determinístico (`invalid`, como o conflito;
 `not-found`, um id que nunca existiu) é descartado com log; qualquer outro erro sobe
 para o transporte reentregar.
 
-**Alternativas consideradas:** sobrescrever o status a cada evento recebido; guardar os
+**Alternativas consideradas:** carregar a transação, decidir em memória e gravar pelo id, que
+era a primeira versão desta entrega; `SELECT ... FOR UPDATE` antes de decidir; coluna de
+versão com bloqueio otimista; sobrescrever o status a cada evento recebido; guardar os
 `eventId` já processados em uma tabela e descartar repetidos antes de tocar na transação;
 tratar conflito como sobrescrita pelo mais recente.
 
-**Por quê:** o Kafka entrega ao menos uma vez, então a duplicata é caso normal, não exceção,
+**Por quê:** ler `pending`, avaliar em memória e atualizar pelo id **não protegia nada**:
+duas execuções concorrentes liam as duas o mesmo `pending`, passavam as duas pela guarda e a
+última escrita vencia. "O primeiro veredito é o que valeu" era uma afirmação do log, não do
+banco. E ordenação por chave no Kafka não substitui isso: ela serializa as mensagens de uma
+transação dentro de **uma** instância, e basta um segundo membro no grupo de consumo, ou o
+varredor republicando em paralelo, para as duas execuções existirem de verdade. A escrita
+condicional move a guarda para o único lugar que decide sob concorrência, e cabe em um
+statement.
+
+`SELECT ... FOR UPDATE` daria a mesma garantia com uma ida a mais ao banco e uma transação
+mais longa, e só faria sentido se houvesse mais de um campo a decidir junto. Coluna de versão
+resolve o caso geral de escrita concorrente, mas pede migration e um número que ninguém mais
+usa: aqui o próprio `status` é a versão, porque a transição é de mão única. `updateMany` e não
+`update` porque zero linhas afetadas aqui é resposta, não exceção: `update` lançaria `P2025`,
+que não é `DomainError`, e o filter do consumer o trataria como falha transitória,
+reentregando três vezes antes de desistir.
+
+O Kafka entrega ao menos uma vez, então a duplicata é caso normal, não exceção,
 e a máquina de estados da transação já é a chave de idempotência: `pending` é o único estado
 que aceita veredito, e o resultado da segunda entrega é idêntico ao da primeira. Uma tabela
 de eventos processados resolve o mesmo problema com uma escrita a mais por mensagem e
@@ -378,6 +399,15 @@ antigos para transações inexistentes, e é o motivo de a categoria do erro dec
 
 Com o commit antes da publicação, o veredito não pode chegar antes de a linha existir;
 `not-found` no consumer de status passa a significar um id que nunca existiu, e é descartado.
+
+A regra da transição (só `pending` aceita, mesmo veredito é duplicata, outro é conflito) é uma
+função pura do domínio, consultada pelos dois adapters de persistência quando a escrita não
+casa. O método `settle` da entidade saiu: depois da escrita condicional ele não tinha mais
+chamador de produção, e um método de domínio vivo só por teste dá a impressão de proteger algo
+que ele não protege mais. O duplo em memória ganhou a mesma semântica condicional, porque o
+anterior gravava sem condição e por isso o teste unitário passava mesmo com a corrida no
+lugar. Os testes com PostgreSQL real não presumem qual concorrente vence, só quantos: sem a
+condição no `where`, quatro dos seis falham.
 
 ## Listagem paginada por página, com limite de tamanho, por um repositório pesquisável
 
@@ -432,6 +462,29 @@ volta que esta tela não usa: o cliente só ouve. O limite conhecido é o fan-ou
 com duas instâncias do serviço, o veredito aplicado em uma não chega ao stream aberto na
 outra; a evolução é um pub/sub compartilhado (Redis) entre as instâncias, e a tela continua
 correta mesmo sem ele porque a consulta direta sempre reflete o banco.
+
+**Assinar antes de ler.** A primeira versão era `concat(atual, stream)`, que parece certa e
+tem uma janela: o `concat` só assina o fan-out depois de a consulta do status atual resolver,
+então um veredito aplicado nesse intervalo se perdia. O efeito não era perder um evento, era
+pior: o cliente recebia `pending`, o estado terminal nunca chegava, o `takeWhile` nunca
+completava e a conexão ficava aberta indefinidamente com a tela presa. Agora a assinatura vem
+antes da leitura e o que acontecer no meio fica em um buffer de um item, que é quanto cabe:
+só existe uma transição terminal por transação. O estado atual continua indo na frente, e o
+primeiro terminal completa o stream, então uma leitura antiga não regride um estado final que
+o cliente já recebeu. O teste resolve a leitura na mão para publicar o veredito exatamente
+dentro da janela, e conta as desmontagens do fan-out para provar que não sobra ouvinte.
+
+**O `404` volta a ser um status HTTP.** A checagem de existência acontecia dentro do
+Observable, ou seja, depois de o Nest já ter respondido `200` com `text/event-stream`: medido,
+um id inexistente devolvia `200`. O handler passou a ser `async` e checa antes de devolver o
+stream. Id fora do formato continua em `400`, pelo pipe. Os dois são cobertos por teste HTTP
+de verdade, e não por inspeção do Observable.
+
+Queda de conexão fica com o navegador, que reconecta sozinho; a reconciliação é o próprio
+desenho do servidor, porque a primeira mensagem de qualquer conexão é o estado atual lido do
+banco. O cliente só acrescenta consultar o detalhe ao receber o erro, para encurtar a espera,
+e descartar com aviso uma mensagem que não parseia em vez de estourar dentro de um callback do
+DOM, fora do boundary do React.
 
 ## Dashboard organizado por funcionalidade, com estado remoto no TanStack Query
 
