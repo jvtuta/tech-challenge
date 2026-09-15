@@ -164,8 +164,9 @@ describe('status update (e2e, Kafka real)', () => {
     const id: string = body.transactionExternalId;
     const url = `${await app.getUrl()}/transactions/${id}/events`;
 
+    // Sem espera antes de publicar: o veredito pode cair na janela entre a assinatura do
+    // fan-out e a leitura do status atual, e é justamente isso que o stream não pode perder.
     const reading = readStatusEvents(url);
-    await new Promise((resolve) => setTimeout(resolve, 300));
     await publishVerdict(id, 'approved');
 
     const { events, closed } = await reading;

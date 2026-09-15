@@ -48,11 +48,17 @@ export function useStatusStream(transaction: TransactionResponse | undefined) {
     if (!id || !pending) {
       return;
     }
-    return subscribeToStatus(id, (change) => {
-      queryClient.setQueryData<TransactionResponse>(transactionKeys.detail(id), (current) =>
-        current ? { ...current, transactionStatus: { name: change.status } } : current,
-      );
-      void queryClient.invalidateQueries({ queryKey: ['transactions', 'list'] });
-    });
+    return subscribeToStatus(
+      id,
+      (change) => {
+        queryClient.setQueryData<TransactionResponse>(transactionKeys.detail(id), (current) =>
+          current ? { ...current, transactionStatus: { name: change.status } } : current,
+        );
+        void queryClient.invalidateQueries({ queryKey: ['transactions', 'list'] });
+      },
+      // O navegador reconecta sozinho e a primeira mensagem da conexão nova é o estado atual;
+      // consultar agora encurta a espera e reconcilia a tela com o banco sem depender disso.
+      () => void queryClient.invalidateQueries({ queryKey: transactionKeys.detail(id) }),
+    );
   }, [id, pending, queryClient]);
 }

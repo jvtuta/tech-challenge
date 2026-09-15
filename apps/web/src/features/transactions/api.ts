@@ -31,14 +31,29 @@ export interface StatusChange {
   status: TransactionStatus;
 }
 
-/** Assina o stream de status; o servidor fecha quando a transação deixa de ser pendente. */
+/**
+ * Assina o stream de status; o servidor fecha quando a transação deixa de ser pendente.
+ *
+ * O `EventSource` reconecta sozinho quando a conexão cai, e a reconciliação vem do próprio
+ * servidor: a primeira mensagem de uma conexão nova é sempre o estado atual. O que sobra para
+ * o cliente é não derrubar a tela no caminho: uma mensagem que não parseia é descartada com
+ * aviso, em vez de estourar dentro de um callback de evento do DOM, fora do boundary do React.
+ */
 export function subscribeToStatus(
   transactionExternalId: string,
   onChange: (change: StatusChange) => void,
+  onConnectionError?: () => void,
 ): () => void {
   const source = new EventSource(apiUrl(`/transactions/${transactionExternalId}/events`));
   source.addEventListener('status', (event) => {
-    onChange(JSON.parse((event as MessageEvent<string>).data) as StatusChange);
+    try {
+      onChange(JSON.parse((event as MessageEvent<string>).data) as StatusChange);
+    } catch {
+      console.warn(`Discarding a status message outside the contract for ${transactionExternalId}`);
+    }
+  });
+  source.addEventListener('error', () => {
+    onConnectionError?.();
   });
   return () => source.close();
 }
