@@ -42,6 +42,10 @@ export class TransactionQueries implements SearchableRepository<
    * uma escrita concorrente entre os dois desalinha a contagem. `REPEATABLE READ` fixa o
    * snapshot no primeiro statement, e como a transação é só de leitura não há erro de
    * serialização para tratar.
+   *
+   * O callback não é exigido pela garantia: a forma em lote aceita a mesma opção e custa uma
+   * ida menos ao engine. Está aqui porque no lote as duas consultas saem em uma requisição, e
+   * o teste que insere uma linha entre elas passa até sem isolamento: a prova se perderia.
    */
   async search(
     params: SearchParams<TransactionFilter>,
