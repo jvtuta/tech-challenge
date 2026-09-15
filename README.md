@@ -81,12 +81,20 @@ gera o cliente Prisma e aplica as migrations, que também semeiam os tipos de tr
 1 transferência, 2 pagamento, 3 saque. Os tópicos do Kafka são criados pelos serviços ao
 subir.
 
-Depois, em três terminais:
+Depois, um comando sobe os três:
 
 ```bash
-pnpm --filter @tech-challenge/transactions start:dev   # http://localhost:3001
-pnpm --filter @tech-challenge/anti-fraud start:dev     # http://localhost:3002/health
-pnpm --filter @tech-challenge/web dev                  # http://localhost:3000
+pnpm dev
+```
+
+Ele compila os pacotes compartilhados e sobe API, antifraude e dashboard em paralelo, com o
+nome do app na frente de cada linha de log; `Ctrl+C` derruba os três. Para reiniciar ou
+acompanhar um serviço isolado, cada um sobe sozinho:
+
+```bash
+pnpm --filter @tech-challenge/transactions dev   # http://localhost:3001
+pnpm --filter @tech-challenge/anti-fraud dev     # http://localhost:3002/health
+pnpm --filter @tech-challenge/web dev            # http://localhost:3000
 ```
 
 As portas vêm do `.env`; nenhum serviço tem host ou porta em código. O Kafka UI fica em

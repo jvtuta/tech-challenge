@@ -15,6 +15,7 @@
     "format:check": "prettier --check .",
     "test": "pnpm build:packages && pnpm -r --if-present run test",
     "build": "pnpm -r --if-present run build",
+    "dev": "pnpm build:packages && pnpm --filter \"./apps/*\" --parallel run dev",
     "quality": "pnpm lint && pnpm typecheck && pnpm format:check && pnpm test && pnpm build",
     "lint:fix": "eslint . --fix",
     "prepare": "husky",
