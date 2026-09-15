@@ -19,7 +19,8 @@
     "lint:fix": "eslint . --fix",
     "prepare": "husky",
     "postinstall": "pnpm build:packages",
-    "db:migrate": "pnpm --filter @tech-challenge/transactions db:migrate",
+    "db:migrate": "prisma migrate deploy --schema apps/transactions/prisma/schema.prisma",
+    "db:migrate:dev": "prisma migrate dev --schema apps/transactions/prisma/schema.prisma",
     "build:packages": "pnpm --filter \"./packages/*\" build"
   },
   "devDependencies": {
@@ -36,6 +37,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^17.5.1",
     "prettier": "^3.9.6",
+    "prisma": "^6.19.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.70.0"
   }

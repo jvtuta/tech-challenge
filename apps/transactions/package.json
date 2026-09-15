@@ -13,8 +13,6 @@
     "test:e2e": "jest --selectProjects e2e",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate deploy",
-    "db:migrate:dev": "prisma migrate dev",
     "test:watch": "jest --watch"
   },
   "dependencies": {
