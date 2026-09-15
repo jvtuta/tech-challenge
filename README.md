@@ -69,9 +69,11 @@ pnpm install
 pnpm db:migrate
 ```
 
-Isso sobe Postgres, Kafka e Kafka UI, instala as dependências, gera o cliente Prisma e aplica
-as migrations (que também semeiam os tipos de transferência: 1 transferência, 2 pagamento,
-3 saque). Os tópicos do Kafka são criados pelos serviços ao subir.
+Isso sobe Postgres, Kafka e Kafka UI, instala as dependências, compila os dois pacotes
+compartilhados (os serviços os resolvem por `dist`, então o `pnpm install` já os constrói),
+gera o cliente Prisma e aplica as migrations, que também semeiam os tipos de transferência:
+1 transferência, 2 pagamento, 3 saque. Os tópicos do Kafka são criados pelos serviços ao
+subir.
 
 Depois, em três terminais:
 

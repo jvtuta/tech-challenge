@@ -18,6 +18,7 @@
     "quality": "pnpm lint && pnpm typecheck && pnpm format:check && pnpm test && pnpm build",
     "lint:fix": "eslint . --fix",
     "prepare": "husky",
+    "postinstall": "pnpm build:packages",
     "db:migrate": "pnpm --filter @tech-challenge/transactions db:migrate",
     "build:packages": "pnpm --filter \"./packages/*\" build"
   },
