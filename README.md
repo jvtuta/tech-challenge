@@ -61,7 +61,8 @@ adapter KafkaJS com falha rápida, publisher em memória para testes e a criaç�
 no boot de cada serviço.
 
 Medido na máquina local: o veredito fica visível entre 10 e 40 ms depois do `POST`; com o
-broker fora do ar, o `POST` responde em cerca de 300 ms.
+broker fora do ar, o `POST` responde entre 0,3 e 0,7 s, dependendo de a conexão ser
+recusada de imediato ou expirar no limite de 1 s do producer.
 
 ## Como rodar
 
