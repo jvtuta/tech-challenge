@@ -4,9 +4,9 @@ export class TransactionAlreadySettledError extends DomainError {
   readonly code = 'TRANSACTION_ALREADY_SETTLED';
   readonly kind = 'invalid';
 
-  constructor(transactionExternalId: string, current: string, attempted: string) {
+  constructor(transactionExternalId: string, attempted: string) {
     super(
-      `Transaction ${transactionExternalId} is already ${current}; it cannot become ${attempted}`,
+      `Transaction ${transactionExternalId} was already settled by another verdict; it cannot become ${attempted}`,
     );
   }
 }

@@ -35,12 +35,16 @@ pendentes com mais de 10 segundos, a cada 5 segundos, em lotes de até 100 por p
 varredor roda em cada instância do serviço, sem lock: republicar o mesmo evento duas vezes é
 inócuo, porque a regra é determinística e o status só muda a partir de `pending`.
 
-O consumer de `transaction.status.updated` aplica o veredito só a partir de `pending`, então
-um evento duplicado não muda nada, e desiste da mensagem na terceira entrega para não prender
-a partição enquanto o banco estiver fora: a transação segue pendente e o varredor recupera.
+O consumer de `transaction.status.updated` aplica o veredito por uma escrita condicionada ao
+status ainda ser `pending`, no `where` do `UPDATE`: duas aplicações concorrentes produzem uma
+transição, dois vereditos opostos deixam um resultado, e uma duplicata não muda nada nem
+notifica de novo. A mensagem é abandonada na terceira entrega para não prender a partição
+enquanto o banco estiver fora: a transação segue pendente e o varredor recupera.
+
 `GET /transactions/:id` devolve uma transação, `GET /transactions` lista com filtros,
 paginação e ordenação, e `GET /transactions/:id/events` é um stream Server-Sent Events que
-entrega o status atual e cada mudança até o estado final.
+assina o fan-out antes de ler o status atual, entrega o atual e cada mudança, e fecha no
+estado final.
 
 **`apps/anti-fraud`**: consome `transaction.created`, aplica a regra (valor acima de 1000
 rejeita, 1000 exato aprova) por uma função pura e publica `transaction.status.updated`.
@@ -125,17 +129,21 @@ pnpm --filter @tech-challenge/anti-fraud exec jest -t "1000"                # po
 
 O que cada suíte cobre:
 
-- **transactions**: entidade e transição de status; criação com publicação após o commit e
-  com o broker recusando; varredor de pendentes; consumer de status idempotente e veredito
-  órfão; listagem com filtros, ordenação, paginação e página e total no mesmo snapshot; SSE
-  até o estado final; filtro de erros de negócio, com o teto de reentregas; health.
+- **transactions**: entidade e regra da transição; criação com publicação após o commit e
+  com o broker recusando; varredor de pendentes; veredito aplicado por escrita condicional,
+  com vereditos concorrentes e opostos contra o Postgres real; veredito órfão; listagem com
+  filtros, ordenação, paginação e página e total no mesmo snapshot; SSE com mudança dentro da
+  janela de assinatura e os status HTTP do stream; filtro de erros de negócio, com o teto de
+  reentregas; health.
 - **anti-fraud**: regra na fronteira (999.99, 1000, 1000.01); consumer publicando o veredito
   com a chave certa; descarte de evento fora do contrato e teto de reentregas; health com o
   broker fora.
 - **messaging** e **contracts**: interface fluente, envelope, validação, orçamento de
   reentregas e publisher em memória.
-- **web**: três estados da listagem e a tabela; validação, gerador de UUID e envio do
-  formulário; detalhe reagindo ao SSE e 404; boundary de erro.
+- **web**: três estados da listagem e a tabela; a listagem chegando ao estado final sem
+  navegar e o período do filtro em três fusos; validação, gerador de UUID e envio do
+  formulário; detalhe reagindo ao SSE, à mensagem fora do contrato, à queda de conexão e ao
+  404; boundary de erro.
 
 O CI (`.github/workflows/quality.yml`) sobe Postgres e Kafka de verdade e roda exatamente
 `pnpm quality`.

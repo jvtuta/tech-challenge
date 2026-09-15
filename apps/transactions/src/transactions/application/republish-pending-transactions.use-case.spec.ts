@@ -19,8 +19,8 @@ describe('RepublishPendingTransactions', () => {
     const stale = Transaction.create(input, before);
     const recent = Transaction.create(input, after);
     const settled = Transaction.create(input, before);
-    settled.settle('approved');
     await Promise.all([stale, recent, settled].map((t) => repository.save(t)));
+    await repository.settle(settled.transactionExternalId, 'approved');
     const publisher = new InMemoryEventPublisher();
 
     const count = await new RepublishPendingTransactions(repository, publisher).execute(cutoff);

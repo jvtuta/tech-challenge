@@ -55,6 +55,40 @@ describe('TransactionDetail', () => {
     expect(FakeEventSource.instances[0]?.closed).toBe(true);
   });
 
+  it('keeps the screen standing when a status message is outside the contract', async () => {
+    mockFetchOnce(200, transaction);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    renderWithQuery(
+      <TransactionDetail transactionExternalId={transaction.transactionExternalId} />,
+    );
+    expect(await screen.findByText('Pendente')).toBeInTheDocument();
+
+    expect(() =>
+      FakeEventSource.instances[0]?.listeners.get('status')?.({ data: 'not json' }),
+    ).not.toThrow();
+
+    expect(screen.getByText('Pendente')).toBeInTheDocument();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('reconciles with the API when the connection drops', async () => {
+    mockFetchOnce(200, transaction);
+
+    renderWithQuery(
+      <TransactionDetail transactionExternalId={transaction.transactionExternalId} />,
+    );
+    expect(await screen.findByText('Pendente')).toBeInTheDocument();
+    const callsBeforeDrop = (global.fetch as jest.Mock).mock.calls.length;
+
+    mockFetchOnce(200, { ...transaction, transactionStatus: { name: 'rejected' } });
+    FakeEventSource.instances[0]?.listeners.get('error')?.({ data: '' });
+
+    expect(await screen.findByText('Rejeitada')).toBeInTheDocument();
+    expect((global.fetch as jest.Mock).mock.calls.length).toBeGreaterThan(callsBeforeDrop);
+  });
+
   it('shows the error state when the transaction does not exist', async () => {
     mockFetchOnce(404, { code: 'TRANSACTION_NOT_FOUND', message: 'Transaction x was not found' });
 
